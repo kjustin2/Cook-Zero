@@ -1,0 +1,40 @@
+{
+  "name": "sizzle-rush",
+  "version": "0.1.0",
+  "description": "Sizzle Rush — a frantic arcade kitchen roguelite. Grill, plate, serve, combo.",
+  "type": "module",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "check": "node check-syntax.js",
+    "dist": "electron-builder --win --publish never",
+    "dist:mac": "electron-builder --mac --publish never",
+    "dist:linux": "electron-builder --linux --publish never"
+  },
+  "build": {
+    "appId": "com.sizzlerush.game",
+    "productName": "Sizzle Rush",
+    "copyright": "Copyright © 2026",
+    "directories": { "output": "dist" },
+    "files": [
+      "index.html",
+      "style.css",
+      "src/**/*",
+      "electron/**/*"
+    ],
+    "win": {
+      "target": [{ "target": "nsis", "arch": ["x64"] }]
+    },
+    "mac": { "target": "dmg" },
+    "linux": { "target": "AppImage" },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "shortcutName": "Sizzle Rush"
+    }
+  },
+  "devDependencies": {
+    "electron": "^34.0.0",
+    "electron-builder": "^25.0.0"
+  }
+}
