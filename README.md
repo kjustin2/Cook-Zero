@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # 🔥 Sizzle Rush
 
 **A frantic arcade kitchen roguelite.** You're the whole kitchen crew. Customers walk in the door
@@ -51,3 +52,6 @@ Burnt patties must be scraped off and trashed 🗑️. Ignored customers storm o
 ```bash
 node check-syntax.js   # parse-check all src modules
 ```
+=======
+# Cook-Zero
+>>>>>>> ef53ecb104db9455f34caf1c2d8bd111cae4b5d9
