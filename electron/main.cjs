@@ -24,6 +24,19 @@ function createWindow() {
 
   mainWindow.loadFile('index.html');
 
+  // Surface renderer load failures in the terminal instead of a silent blank
+  // window. Costs nothing when everything works; saves a blind debugging session
+  // if a file goes missing or a module throws on load.
+  mainWindow.webContents.on('did-fail-load', (_e, code, desc, url) => {
+    console.error(`[Sizzle Rush] renderer failed to load: ${desc} (${code}) ${url}`);
+  });
+  mainWindow.webContents.on('render-process-gone', (_e, details) => {
+    console.error('[Sizzle Rush] renderer process gone:', details.reason);
+  });
+  // Opt-in DevTools for debugging: `SIZZLE_DEV=1 npm start`. Off by default so
+  // a normal launch is just the game.
+  if (process.env.SIZZLE_DEV) mainWindow.webContents.openDevTools({ mode: 'detach' });
+
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
   });
