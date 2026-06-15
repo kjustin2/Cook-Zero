@@ -100,6 +100,7 @@ const fail = await withGame(async ({ page, check }) => {
   check("Play Again restarts the run", (await phase()) === "playing", `phase=${await phase()}`);
   await forceEndShift(false);
   await page.evaluate(() => window.__SR.skipStory());
+  await page.waitForTimeout(250); // let the game-over screen render
   check("missing quota → game over", (await phase()) === "gameOver", `phase=${await phase()}`);
   const firedText = await page.evaluate(() => document.body.innerText.includes("FIRED"));
   check("game-over screen shows YOU'RE FIRED", firedText);

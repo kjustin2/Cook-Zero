@@ -24,9 +24,10 @@ export class Stage {
   readonly camera: THREE.PerspectiveCamera;
   readonly keyLight: THREE.DirectionalLight;
   readonly hemiLight: THREE.HemisphereLight;
+  quality: "high" | "low" = "high";
   private readonly fog: THREE.Fog;
 
-  private composer: EffectComposer;
+  private composer!: EffectComposer;
   private trauma = 0;
   private zoom = 0;
   private readonly baseCamPos = new THREE.Vector3(0, 15.6, 14.0);
@@ -72,12 +73,14 @@ export class Stage {
     this.keyLight = new THREE.DirectionalLight(0xfff0d6, 1.9);
     this.keyLight.position.set(8, 24, 14);
     this.keyLight.castShadow = true;
-    this.keyLight.shadow.mapSize.set(2048, 2048);
+    // 1024 map over a frustum tightened to the play area — quarter the shadow-pass
+    // fill of a 2048/±20 setup, with similar on-screen resolution.
+    this.keyLight.shadow.mapSize.set(1024, 1024);
     const c = this.keyLight.shadow.camera;
-    c.left = -20;
-    c.right = 20;
-    c.top = 20;
-    c.bottom = -20;
+    c.left = -14;
+    c.right = 14;
+    c.top = 14;
+    c.bottom = -14;
     c.near = 1;
     c.far = 70;
     this.keyLight.shadow.bias = -0.0006;
@@ -89,21 +92,40 @@ export class Stage {
     fill.position.set(-12, 10, -8);
     this.scene.add(fill);
 
+    this.buildPost();
+    this.setTimeOfDay(0);
+    window.addEventListener("resize", () => this.onResize());
+  }
+
+  /** (Re)build the post chain for the current quality. High adds mipmap bloom +
+   *  SMAA; low uses a cheap bloom and no antialias pass. */
+  private buildPost(): void {
+    if (this.composer) this.composer.dispose();
     this.composer = new EffectComposer(this.renderer, { frameBufferType: THREE.HalfFloatType });
     this.composer.addPass(new RenderPass(this.scene, this.camera));
     const bloom = new BloomEffect({
       intensity: 0.55,
       luminanceThreshold: 0.9,
       luminanceSmoothing: 0.26,
-      mipmapBlur: true,
+      mipmapBlur: this.quality === "high",
       radius: 0.58,
     });
     const vignette = new VignetteEffect({ darkness: 0.26, offset: 0.42 });
-    this.composer.addPass(new EffectPass(this.camera, bloom, vignette, new SMAAEffect()));
+    const effects = this.quality === "high"
+      ? [bloom, vignette, new SMAAEffect()]
+      : [bloom, vignette];
+    this.composer.addPass(new EffectPass(this.camera, ...effects));
     this.composer.setSize(window.innerWidth, window.innerHeight);
+  }
 
-    this.setTimeOfDay(0);
-    window.addEventListener("resize", () => this.onResize());
+  /** Switch graphics quality. Low drops shadows, antialiasing, mipmap bloom and
+   *  device-pixel-ratio scaling for a big win on weak GPUs. */
+  applyQuality(q: "high" | "low"): void {
+    this.quality = q;
+    this.renderer.setPixelRatio(q === "high" ? Math.min(window.devicePixelRatio, 2) : 1);
+    this.renderer.setSize(window.innerWidth, window.innerHeight);
+    this.keyLight.castShadow = q === "high";
+    this.buildPost();
   }
 
   /** f: 0 (afternoon) → 1 (deep night). Shifts sky, fog and key light. */

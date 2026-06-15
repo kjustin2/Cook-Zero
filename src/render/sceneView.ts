@@ -4,7 +4,7 @@
 // order bubbles, floating text, and the build-mode cursor/ghost.
 
 import * as THREE from "three";
-import type { GameState, Carry, IngredientId, PlatePart } from "../game/types";
+import type { GameState, Carry, IngredientId, PlacedItem, PlatePart } from "../game/types";
 import type { Input } from "../core/input";
 import { def, RECIPES } from "../game/catalog";
 import { items, worldOfCell, cellOfWorld, TILE, COUNTER_Z, CUSTOMER_Z } from "../game/grid";
@@ -25,6 +25,8 @@ function disposeGeom(obj: THREE.Object3D): void {
     if (m.geometry) m.geometry.dispose();
   });
 }
+
+const FOOD_ANCHOR = new THREE.Vector3(0, 1.1, 0); // fallback slot height
 
 const ING_FOOD: Partial<Record<IngredientId, FoodKind>> = {
   bun: "bun",
@@ -67,6 +69,7 @@ export class SceneView {
   private groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
   private time = 0;
   private neonMat: THREE.MeshStandardMaterial | null = null;
+  private readonly scratch = new THREE.Vector3();
 
   constructor(stage: Stage, G: GameState) {
     this.scene = stage.scene;
@@ -232,8 +235,9 @@ export class SceneView {
 
   // ── Per-frame sync ──────────────────────────────────────────────────────
   update(G: GameState, dt: number, input: Input): void {
-    this.syncLayout(G);
-    this.syncSlotFood(G);
+    const its = items(G.grid); // compute the placed-item list once per frame
+    this.syncLayout(G, its);
+    this.syncSlotFood(its);
     this.syncChef(G, dt);
     this.syncHelper(G, dt);
     this.syncCustomers(G, dt);
@@ -241,12 +245,12 @@ export class SceneView {
     this.syncFloaters(G);
     this.syncBuild(G, input);
     this.animateDecor(dt);
-    this.animateStations(G, dt);
+    this.animateStations(dt, its);
   }
 
-  private syncLayout(G: GameState): void {
+  private syncLayout(G: GameState, its: PlacedItem[]): void {
     const live = new Set<number>();
-    for (const it of items(G.grid)) {
+    for (const it of its) {
       live.add(it.uid);
       let v = this.itemViews.get(it.uid);
       if (!v) {
@@ -277,9 +281,17 @@ export class SceneView {
     }
   }
 
-  private syncSlotFood(G: GameState): void {
+  /** Place an entry at a station's local slot anchor (reuses a scratch vector). */
+  private placeAtSlot(entry: { group: THREE.Group }, view: ItemView | undefined, local: THREE.Vector3 | undefined): void {
+    if (!view) return;
+    this.scratch.copy(local ?? FOOD_ANCHOR);
+    view.group.localToWorld(this.scratch);
+    entry.group.position.copy(this.scratch);
+  }
+
+  private syncSlotFood(its: PlacedItem[]): void {
     const live = new Set<string>();
-    for (const it of items(G.grid)) {
+    for (const it of its) {
       const d = def(it.defId);
       if (!it.slots || !d?.kind) continue;
       const view = this.itemViews.get(it.uid);
@@ -302,9 +314,7 @@ export class SceneView {
           entry = { group: g, sig };
           this.slotFood.set(key, entry);
         }
-        const local = slots[i] ?? new THREE.Vector3(0, 1.1, 0);
-        const world = view ? view.group.localToWorld(local.clone()) : new THREE.Vector3();
-        entry.group.position.copy(world);
+        this.placeAtSlot(entry, view, slots[i]);
       }
       // Prep plate.
       if (d.kind === "prep" && it.plate && it.plate.length > 0) {
@@ -322,9 +332,7 @@ export class SceneView {
           entry = { group: g, sig };
           this.slotFood.set(key, entry);
         }
-        const local = slots[0] ?? new THREE.Vector3(0, 1.1, 0);
-        const world = view ? view.group.localToWorld(local.clone()) : new THREE.Vector3();
-        entry.group.position.copy(world);
+        this.placeAtSlot(entry, view, slots[0]);
       }
     }
     for (const [key, entry] of this.slotFood) {
@@ -468,9 +476,9 @@ export class SceneView {
     }
   }
 
-  private animateStations(G: GameState, dt: number): void {
+  private animateStations(dt: number, its: PlacedItem[]): void {
     this.time += dt;
-    for (const it of items(G.grid)) {
+    for (const it of its) {
       const v = this.itemViews.get(it.uid);
       if (!v?.light) continue;
       const cooking = it.slots?.some((s) => s.filling !== null) ?? false;

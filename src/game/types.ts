@@ -348,6 +348,7 @@ export interface GameState {
   cutscene: Cutscene | null;
   dayCard: DayCard | null;
   muted: boolean;
+  quality: "high" | "low";
 }
 
 export interface BuildState {

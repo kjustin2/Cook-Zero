@@ -103,15 +103,31 @@ never imports Three.js and runs headless in tests.
 `GRID_COLS/ROWS`, `DASH_TIME/CD/MULT`, `CUSTOMER_KINDS`. Modifier list:
 `game/modifiers.ts`.
 
+## Performance
+
+- **Quality setting** (`stage.applyQuality`, persisted as `meta.quality`, toggled on
+  the menu): `high` = 1024 PCF shadows + mipmap bloom + SMAA + dpr≤2; `low` = no
+  shadows, cheap bloom, no SMAA, dpr 1. Big win on weak GPUs.
+- Shadow map is 1024 over a frustum tightened to the play area (¼ the fill of the
+  old 2048/±20). IBL is a one-time PMREM; `environmentIntensity` kept low.
+- Hot paths avoid per-frame allocation: `sceneView.update` computes `items()` once
+  and reuses a scratch `Vector3` for slot-food placement; the build-mode "Kitchen
+  Effects" panel only rebuilds its DOM when a value changes. Removed meshes are
+  disposed (geometry-only for shared-material actor rigs) — `smoke-perf` proves
+  there's no geometry leak across heavy customer churn.
+- `smoke-perf` guards a scene draw-call budget, bounded geometry/texture counts, a
+  sub-0.5ms sim step, the quality toggle, and an fps floor. Test hooks: `__SR.info()`,
+  `__SR.drawCalls()` (direct non-composer render), `__SR.setQuality()`.
+
 ## Testing notes
 
 - Smoke tests (`scripts/smoke-*.mjs`) use the shared `_harness.mjs` (auto-finds
   cached Chromium via `_chrome.mjs`). `npm test` (`run-smokes.mjs`) boots one dev
-  server and runs all 12 suites against it. Cutscenes interrupt `play()` now, so
+  server and runs all 13 suites against it. Cutscenes interrupt `play()` now, so
   logic tests call `__SR.skipStory()` after `play()` to reach `playing`; real-DOM
   tests click the cutscene **Skip** button. Two complementary styles, both
   Playwright headless:
-  - **Logic probes** (`boot/story/adjacency/economy/cook/events/systems/balance`) drive
+  - **Logic probes** (`boot/story/adjacency/economy/cook/events/systems/balance/perf`) drive
     `window.__SR` directly (`tick`, `interact`, `place`, `buy`, `sell`, `upgrade`,
     `stars`, …) for deterministic assertions on cooking, scoring, adjacency, burns,
     build, upgrades, pricing payout, recipe gating, plate matching, star tiers, etc.

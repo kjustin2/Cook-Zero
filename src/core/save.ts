@@ -11,6 +11,7 @@ export interface MetaSave {
   bestStars: number;
   runs: number;
   muted: boolean;
+  quality: "high" | "low";
 }
 
 const DEFAULT: MetaSave = {
@@ -21,6 +22,7 @@ const DEFAULT: MetaSave = {
   bestStars: 0,
   runs: 0,
   muted: false,
+  quality: "high",
 };
 
 export function loadMeta(): MetaSave {

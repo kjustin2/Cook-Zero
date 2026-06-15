@@ -116,6 +116,7 @@ export function createState(seed: number): GameState {
     cutscene: null,
     dayCard: null,
     muted: loadMeta().muted,
+    quality: loadMeta().quality,
   };
 
   recomputeDerived(s);

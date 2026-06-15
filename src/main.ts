@@ -44,11 +44,12 @@ const music = new WebMusic();
 
 const ctx: Ctx = { G, input, rng, fx, sfx, music };
 
-// Apply the persisted mute setting.
+// Apply persisted settings.
 if (G.muted) {
   sfx.setMuted(true);
   music.setMuted(true);
 }
+stage.applyQuality(G.quality);
 
 // Pause overlay (toggled outside the menu system).
 const pauseEl = document.createElement("div");
@@ -98,6 +99,13 @@ const controller: GameController = {
     music.setMuted(G.muted);
     const m = loadMeta();
     m.muted = G.muted;
+    saveMeta(m);
+  },
+  toggleQuality: () => {
+    G.quality = G.quality === "high" ? "low" : "high";
+    stage.applyQuality(G.quality);
+    const m = loadMeta();
+    m.quality = G.quality;
     saveMeta(m);
   },
 };
@@ -208,6 +216,9 @@ interface TestApi {
   stars: () => number;
   skipStory: () => void;
   advanceCutscene: () => void;
+  info: () => { calls: number; tris: number; geometries: number; textures: number; castShadow: boolean; pixelRatio: number; quality: string };
+  drawCalls: () => number;
+  setQuality: (q: "high" | "low") => void;
 }
 const api: TestApi = {
   G,
@@ -253,6 +264,24 @@ const api: TestApi = {
     while (G.phase === "cutscene" && guard++ < 50) skipCutscene(G);
   },
   advanceCutscene: () => advanceCutscene(G),
+  info: () => ({
+    calls: stage.renderer.info.render.calls,
+    tris: stage.renderer.info.render.triangles,
+    geometries: stage.renderer.info.memory.geometries,
+    textures: stage.renderer.info.memory.textures,
+    castShadow: stage.keyLight.castShadow,
+    pixelRatio: stage.renderer.getPixelRatio(),
+    quality: stage.quality,
+  }),
+  // True scene draw-call count via a direct (non-composer) render.
+  drawCalls: () => {
+    stage.renderer.render(stage.scene, stage.camera);
+    return stage.renderer.info.render.calls;
+  },
+  setQuality: (q) => {
+    G.quality = q;
+    stage.applyQuality(q);
+  },
 };
 (window as unknown as { __G: typeof G; __SR: TestApi }).__G = G;
 (window as unknown as { __G: typeof G; __SR: TestApi }).__SR = api;

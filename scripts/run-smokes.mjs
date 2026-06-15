@@ -15,6 +15,7 @@ const SMOKES = [
   "smoke-events.mjs",
   "smoke-systems.mjs",
   "smoke-balance.mjs",
+  "smoke-perf.mjs",
   "smoke-flow.mjs",
   "smoke-input.mjs",
   "smoke-playthrough.mjs",

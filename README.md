@@ -58,7 +58,8 @@ npm start          # = vite build + electron .
 ## Tech
 
 - **Three.js r170** + `postprocessing` (bloom, vignette, SMAA) — all art is
-  procedural (zero asset files).
+  procedural (zero asset files). A **Graphics: High/Low** menu toggle scales
+  shadows, antialiasing and pixel ratio for weaker GPUs.
 - **Vite 6 + strict TypeScript**, ES modules. **Electron** desktop wrapper.
 - Plain-function game systems sharing a central `G` state object via a `Ctx`
   hub; render & audio are reached only through interfaces, so the logic runs

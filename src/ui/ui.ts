@@ -27,6 +27,7 @@ export interface GameController {
   advanceCutscene(): void;
   skipCutscene(): void;
   toggleMute(): void;
+  toggleQuality(): void;
 }
 
 type El = HTMLElement;
@@ -61,6 +62,7 @@ export class UI {
   private refs: Record<string, El> = {};
   private lastPhase = "";
   private lastMod = "";
+  private derivedSig = "";
 
   constructor(root: El, private ctrl: GameController, private ctx: Ctx) {
     this.hud = this.buildHud();
@@ -206,6 +208,10 @@ export class UI {
       ["Perfect window", `+${G.derived.perfectWindow.toFixed(1)}s`],
       ["Reputation gain", `${G.derived.repGainMult.toFixed(2)}×`],
     ];
+    // Skip the DOM rebuild unless a value actually changed.
+    const sig = lines.map((l) => l[1]).join("|");
+    if (sig === this.derivedSig) return;
+    this.derivedSig = sig;
     this.derived.replaceChildren(
       el("h4", {}, "Kitchen Effects"),
       ...lines.map(([k, v]) => el("div", { class: "line" }, el("span", {}, k), el("b", {}, v))),
@@ -251,6 +257,10 @@ export class UI {
       this.ctrl.toggleMute();
       this.onPhase(this.ctx.G);
     });
+    const qualBtn = btn(this.ctx.G.quality === "high" ? "✨ Graphics: High" : "⚡ Graphics: Low", "ghost small", () => {
+      this.ctrl.toggleQuality();
+      this.onPhase(this.ctx.G);
+    });
     this.overlay.append(
       el("h1", { class: "title-logo" }, "SIZZLE RUSH"),
       el("div", { class: "subtitle" }, "A failing diner. Six nights to save it."),
@@ -265,7 +275,7 @@ export class UI {
           el("span", { class: "k" }, "Best combo"), el("span", { class: "v" }, `x${meta.bestCombo}`),
           el("span", { class: "k" }, "Best night rating"), el("span", { class: "v" }, starStr(meta.bestStars)),
           el("span", { class: "k" }, "Shifts worked"), el("span", { class: "v" }, `${meta.runs}`)),
-        el("div", { class: "row", style: "margin-top:12px" }, muteBtn),
+        el("div", { class: "row", style: "margin-top:12px" }, muteBtn, qualBtn),
       ),
       btn("▶  New Game", "", () => this.ctrl.play()),
     );
