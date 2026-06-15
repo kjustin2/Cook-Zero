@@ -1,40 +1,34 @@
 {
-  "name": "sizzle-rush",
-  "version": "0.1.0",
-  "description": "Sizzle Rush — a frantic arcade kitchen roguelite. Grill, plate, serve, combo.",
+  "name": "sizzle-rush-3d",
+  "version": "1.0.0",
+  "description": "Sizzle Rush — a 3D arcade kitchen roguelite. Cook, plate, serve, combo, then rearrange and decorate your kitchen to chase bigger tips.",
   "type": "module",
-  "main": "electron/main.cjs",
+  "main": "electron-main.cjs",
   "scripts": {
-    "start": "electron .",
-    "check": "node check-syntax.js",
-    "dist": "electron-builder --win --publish never",
-    "dist:mac": "electron-builder --mac --publish never",
-    "dist:linux": "electron-builder --linux --publish never"
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
+    "preview": "vite preview",
+    "electron": "electron .",
+    "standalone": "npm run build && electron .",
+    "start": "npm run standalone",
+    "test": "node scripts/run-smokes.mjs"
   },
-  "build": {
-    "appId": "com.sizzlerush.game",
-    "productName": "Sizzle Rush",
-    "copyright": "Copyright © 2026",
-    "directories": { "output": "dist" },
-    "files": [
-      "index.html",
-      "style.css",
-      "src/**/*",
-      "electron/**/*"
-    ],
-    "win": {
-      "target": [{ "target": "nsis", "arch": ["x64"] }]
-    },
-    "mac": { "target": "dmg" },
-    "linux": { "target": "AppImage" },
-    "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
-      "shortcutName": "Sizzle Rush"
-    }
+  "dependencies": {
+    "postprocessing": "^6.36.0",
+    "three": "^0.170.0"
   },
   "devDependencies": {
+    "@types/three": "^0.170.0",
     "electron": "^34.0.0",
-    "electron-builder": "^25.0.0"
+    "playwright-core": "^1.49.0",
+    "typescript": "^5.6.0",
+    "vite": "^6.0.0"
+  },
+  "build": {
+    "appId": "com.sizzlerush.game3d",
+    "productName": "Sizzle Rush",
+    "directories": { "output": "release" },
+    "files": ["dist/**/*", "electron-main.cjs"]
   }
 }

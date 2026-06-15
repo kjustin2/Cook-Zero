@@ -1,53 +1,74 @@
-# 🔥 Sizzle Rush
+# Sizzle Rush 3D
 
-**A frantic arcade kitchen roguelite.** You're the whole kitchen crew. Customers walk in the door
-and queue at your counter with order bubbles — grill patties in the golden perfect-sear window,
-fry potatoes, assemble plates, and run each order to the right customer before they storm out.
-Chain serves to build a combo multiplier, hit each shift's cash quota, pick an upgrade, and do it
-again — busier. Survive all 5 shifts to become a Kitchen Legend.
+A real-time **3D arcade kitchen roguelite** built with Three.js. You directly
+control a chef inside a restaurant — grab ingredients, cook on the grill & fryer,
+plate dishes, and serve customers across the counter before their patience runs
+out. Survive six escalating dinner rushes, each with a cash quota.
 
-Built with zero dependencies: vanilla JS + Canvas 2D, with all sound synthesized live via WebAudio.
+The twist: between shifts you **rebuild and decorate your kitchen** on a tile
+floor plan, and **placement matters** — a fan next to the grill speeds cooking,
+plants up front calm your guests, neon draws a bigger crowd. You also **run the
+business**: set menu prices, grow your reputation, and hire a line cook.
 
-## Play it
+## Run it
 
-No build step. Serve the project root with any static server:
-
-```bash
-python -m http.server 8000
-# open http://localhost:8000
-```
-
-Or run as a desktop app:
+No global tooling needed (Node 18+).
 
 ```bash
 npm install
-npm start
+npm run dev        # Vite dev server → http://localhost:5179
+```
+
+Desktop app (Electron, serves the production build over loopback):
+
+```bash
+npm start          # = vite build + electron .
 ```
 
 ## Controls
 
-| Key | Action |
-|---|---|
-| WASD / Arrows | Move |
-| Space / E | Interact (grab, cook, plate, serve, trash) |
-| 1 / 2 / 3 | Pick upgrade |
-| P / Esc | Pause |
-| M | Mute |
+- **WASD / arrows** — move the chef
+- **Space** — context interact (grab, cook, plate, serve) — the on-screen hint
+  shows what Space will do
+- **Shift** — dash (short burst, ~1s cooldown)
+- **P** — pause
+- In the **Floor Plan** (build mode): click to place/pick up, **R** rotate,
+  **X** sell, **Esc** done
 
-## How to play
+## Gameplay loop
 
-1. Customers walk in and wait at the **service counter** — their speech bubble shows what they want.
-2. **Grab** a raw patty 🥩 from the bin and drop it on the **grill**.
-3. Watch the ring: orange = cooking, **pulsing gold = perfect sear** (bonus cash!), red = about to burn.
-4. Build the order on a **prep counter** — bun 🥯, patty, cheese 🧀, fries 🍟 — it glows green when it matches someone's order.
-5. Carry the plate across the kitchen and serve it **to that customer** at the counter.
-6. Serve fast and back-to-back: combos multiply your earnings up to 3×. At ×5 you're **ON FIRE**.
-7. Miss the shift quota and you're fired. Clear it and choose 1 of 3 upgrades before the next, harder shift.
+1. **Cook & serve** during a 120s shift. Pull patties in the golden window for a
+   *Perfect* sear; chain serves for a combo multiplier; go *On Fire* at combo 5.
+   Watch for **VIPs** (👑 big pay, impatient) and **critics** (📸 huge reputation
+   swing), and a random **daily modifier** (Happy Hour, Dinner Rush, Foodie
+   Night…). Each shift is scored **1–3 stars**.
+2. **Hit the quota** to keep your job. Miss it and you're fired.
+3. **Manage** between shifts: shop for stations & decor, pick a roguelite
+   upgrade, set your **pricing** (price vs. patience vs. crowd size), and hire /
+   upgrade a **line cook** who tends your grills.
+4. **Decorate** your floor plan. The live *Kitchen Effects* panel shows exactly
+   how your layout changes cook speed, patience, tips, combo window, reputation
+   gain and crowd size.
 
-Burnt patties must be scraped off and trashed 🗑️. Ignored customers storm out and kill your combo.
+## Tech
 
-## Dev
+- **Three.js r170** + `postprocessing` (bloom, vignette, SMAA) — all art is
+  procedural (zero asset files).
+- **Vite 6 + strict TypeScript**, ES modules. **Electron** desktop wrapper.
+- Plain-function game systems sharing a central `G` state object via a `Ctx`
+  hub; render & audio are reached only through interfaces, so the logic runs
+  headless.
+
+## Tests
+
+Headless-Chromium smoke tests (Playwright) that drive the real game through a
+`window.__SR` test surface:
 
 ```bash
-node check-syntax.js   # parse-check all src modules
+npm test           # boots a dev server, runs every scripts/smoke-*.mjs
+npm run typecheck  # tsc --noEmit (strict)
+npm run build      # typecheck + production bundle
 ```
+
+Suites: boot, adjacency/decoration effects, business/economy, the cook→serve
+pipeline, and the full phase machine (day → manage → build → next day → win/lose).

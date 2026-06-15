@@ -3,6 +3,7 @@ node_modules/
 
 # Build output
 dist/
+release/
 
 # Logs
 *.log
@@ -13,8 +14,7 @@ npm-debug.log*
 Thumbs.db
 .vscode/
 .idea/
+.vite/
 
-# Local test scaffolding (headless smoke tests / screenshots)
-test.html
-shot.html
-shot-*.png
+# Headless smoke-test screenshots
+shots/
