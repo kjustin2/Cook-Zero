@@ -58,11 +58,16 @@ export class UI {
   private dayCardEl: El;
   private dcTitle: El;
   private dcSub: El;
+  private fxLow: El;
+  private fxFire: El;
+  private fxFlash: El;
   private cs: { portrait: El; name: El; text: El; hint: El } | null = null;
   private refs: Record<string, El> = {};
   private lastPhase = "";
   private lastMod = "";
   private derivedSig = "";
+  private lastCombo = 0;
+  private lastBumpCombo = 0;
 
   constructor(root: El, private ctrl: GameController, private ctx: Ctx) {
     this.hud = this.buildHud();
@@ -74,7 +79,12 @@ export class UI {
     this.dcSub = el("div", { class: "dc-sub" });
     this.dayCardEl = el("div", { class: "daycard" }, this.dcTitle, this.dcSub);
     this.overlay = el("div", { class: "overlay" });
-    root.append(this.hud, this.hint, this.toast, this.modChip, this.dayCardEl, this.derived, this.overlay);
+    // Full-screen feedback layers (behind the HUD/overlay).
+    const fxVignette = el("div", { class: "fx fx-vignette" });
+    this.fxLow = el("div", { class: "fx fx-lowtime" });
+    this.fxFire = el("div", { class: "fx fx-fire" });
+    this.fxFlash = el("div", { class: "fx fx-flash" });
+    root.append(fxVignette, this.fxLow, this.fxFire, this.fxFlash, this.hud, this.hint, this.toast, this.modChip, this.dayCardEl, this.derived, this.overlay);
     this.hud.style.display = "none";
     this.hint.style.display = "none";
     this.toast.style.display = "none";
@@ -105,6 +115,17 @@ export class UI {
       stat("Stars", "h-rep"),
       el("div", { class: "sep" }),
       stat("Combo", "h-combo", "combo"));
+  }
+
+  /** Restart a CSS animation by toggling its class (forces a reflow). */
+  private replay(elm: El, cls: string): void {
+    elm.classList.remove(cls);
+    void elm.offsetWidth;
+    elm.classList.add(cls);
+  }
+
+  private flash(): void {
+    this.replay(this.fxFlash, "on");
   }
 
   // ── per-frame ──
@@ -180,6 +201,17 @@ export class UI {
     } else {
       this.dayCardEl.style.display = "none";
     }
+
+    // Full-screen feedback + combo juice.
+    this.fxLow.classList.toggle("active", playing && G.dayTime <= 15);
+    this.fxFire.classList.toggle("active", playing && G.combo >= ON_FIRE_AT);
+    if (playing && G.combo > this.lastCombo) this.flash();
+    if (G.combo !== this.lastBumpCombo && G.combo > 0) {
+      const comboStat = this.refs["h-combo"]?.parentElement as El | undefined;
+      if (comboStat) this.replay(comboStat, "bump");
+    }
+    this.lastCombo = G.combo;
+    this.lastBumpCombo = G.combo;
   }
 
   private updateHud(G: GameState): void {

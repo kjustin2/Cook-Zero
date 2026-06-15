@@ -3,6 +3,11 @@
 //   title → playing → dayEnd → manage ⇄ build → playing … → win | gameOver
 // Exposes window.__G / window.__SR for headless smoke tests.
 
+import "@fontsource/baloo-2/latin-700.css";
+import "@fontsource/baloo-2/latin-800.css";
+import "@fontsource/nunito/latin-600.css";
+import "@fontsource/nunito/latin-700.css";
+import "@fontsource/nunito/latin-800.css";
 import "./style.css";
 import { Input } from "./core/input";
 import { RNG } from "./core/rng";

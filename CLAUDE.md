@@ -62,7 +62,16 @@ never imports Three.js and runs headless in tests.
 | Meta | `game/{upgrades,shop,placement,flow,modifiers,story,cutscene}.ts` | upgrades, shop, build mode, day transitions, modifiers, story content, cutscene controller |
 | Render | `render/{stage,sceneView,kit,fx}.ts` + `render/{food,stations,decor,actors}.ts` | Three.js renderer/post (IBL env map + time-of-day), scene sync, FX, procedural meshes |
 | Audio | `audio/{sfx,music}.ts` | procedural WebAudio SFX + music (intensity follows combo) |
-| UI | `ui/ui.ts`, `style.css` | DOM HUD + every overlay screen |
+| UI | `ui/ui.ts`, `style.css` | DOM HUD + every overlay screen + full-screen FX layers |
+
+**Look & feel:** DOM/CSS over the live 3D canvas, modeled on Rogue-Hero-3's system.
+Two self-hosted fonts (`@fontsource`): **Baloo 2** (`--font-display`, all titles/
+headings/values) + **Nunito** (`--font-ui`, body/buttons). One warm token set + a
+single accent; glows via `color-mix`. One container recipe (glass + hairline +
+accent top-border + soft lift); every overlay fades in (`screen-fade`/`rise-in`),
+cards deal in staggered. UI adds full-screen feedback layers (`.fx-vignette`,
+`.fx-lowtime` red pulse, `.fx-fire` combo glow, `.fx-flash` serve flash) and a
+combo HUD bump — re-triggered via the `void el.offsetWidth` reflow trick.
 
 ## Key conventions
 
