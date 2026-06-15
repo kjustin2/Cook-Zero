@@ -219,12 +219,36 @@ export interface Derived {
 
 export type Phase =
   | "title"
+  | "cutscene"
   | "playing"
   | "dayEnd"
   | "manage"
   | "build"
   | "gameOver"
   | "win";
+
+/** One line of dialogue in a cutscene. */
+export interface Beat {
+  speaker: string;
+  portrait: string; // emoji
+  text: string;
+  color?: string; // name-plate accent
+}
+
+export interface Cutscene {
+  beats: Beat[];
+  index: number;
+  typed: number; // typewriter progress (chars, fractional)
+  onDone: () => void;
+  label: string; // e.g. "Night 1"
+}
+
+/** Brief "Night N — theme" title card shown at the start of a shift. */
+export interface DayCard {
+  title: string;
+  sub: string;
+  t: number;
+}
 
 export interface Chef {
   x: number;
@@ -321,6 +345,9 @@ export interface GameState {
   shopOffer: string[]; // catalog ids offered this visit
   upgradeOffer: string[]; // upgrade ids offered this visit
   toast: { text: string; t: number } | null;
+  cutscene: Cutscene | null;
+  dayCard: DayCard | null;
+  muted: boolean;
 }
 
 export interface BuildState {

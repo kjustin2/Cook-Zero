@@ -7,6 +7,7 @@ const fail = await withGame(async ({ page, check }) => {
     const SR = window.__SR;
     const G = window.__G;
     SR.ctrl.play();
+    SR.skipStory();
     G.coins = 600;
     SR.ctrl.toManage();
 

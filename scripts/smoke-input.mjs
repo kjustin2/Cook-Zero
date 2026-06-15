@@ -7,8 +7,10 @@ import { withGame, finish } from "./_harness.mjs";
 const fail = await withGame(async ({ page, check }) => {
   const get = (fn) => page.evaluate(fn);
   await get(() => localStorage.clear());
-  await page.locator("button", { hasText: /Start Shift/ }).click();
+  await page.locator("button", { hasText: /New Game/ }).click();
   await page.waitForTimeout(300);
+  await get(() => window.__SR.skipStory());
+  await page.waitForTimeout(150);
 
   // 1) WASD movement (real keys, real rAF).
   await get(() => { const c = window.__G.chef; c.x = -2; c.z = 6; c.vx = 0; c.vz = 0; });

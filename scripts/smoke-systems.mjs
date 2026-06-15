@@ -8,6 +8,7 @@ const fail = await withGame(async ({ page, check }) => {
     const SR = window.__SR;
     const G = window.__G;
     SR.ctrl.play();
+    SR.skipStory();
     const log = {};
     const go = (c, rr) => { const w = SR.cellWorld(c, rr); G.chef.x = w.x; G.chef.z = w.z; };
     const grillItem = () => G.grid.cells.map((c) => c.item).find((it) => it && it.defId === "grill");

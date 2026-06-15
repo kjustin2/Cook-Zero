@@ -6,8 +6,10 @@ import { withGame, finish } from "./_harness.mjs";
 
 const fail = await withGame(async ({ page, check }) => {
   await page.evaluate(() => localStorage.clear());
-  await page.locator("button", { hasText: /Start Shift/ }).click();
+  await page.locator("button", { hasText: /New Game/ }).click();
   await page.waitForTimeout(300);
+  await page.evaluate(() => window.__SR.skipStory());
+  await page.waitForTimeout(150);
 
   const keys = ["KeyW", "KeyA", "KeyS", "KeyD", "ShiftLeft", "Space"];
   for (let i = 0; i < 12; i++) {

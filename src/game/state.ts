@@ -5,6 +5,7 @@ import type { Derived, GameState, Mods, PlacedItem } from "./types";
 import { RECIPES } from "./catalog";
 import { createGrid, place } from "./grid";
 import { recomputeDerived } from "./adjacency";
+import { loadMeta } from "../core/save";
 import {
   COMBO_BASE_WINDOW,
   GRID_COLS,
@@ -112,6 +113,9 @@ export function createState(seed: number): GameState {
     shopOffer: [],
     upgradeOffer: [],
     toast: null,
+    cutscene: null,
+    dayCard: null,
+    muted: loadMeta().muted,
   };
 
   recomputeDerived(s);

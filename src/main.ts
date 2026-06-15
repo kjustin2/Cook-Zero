@@ -15,7 +15,9 @@ import type { Ctx } from "./game/ctx";
 import { updatePlaying } from "./game/sim";
 import { actionFor } from "./game/interact";
 import { startDash } from "./game/chef";
-import { startDay, finishDay, prepareManage, advanceDay, computeStars } from "./game/flow";
+import { beginDay, finishDay, prepareManage, computeStars } from "./game/flow";
+import { startCutscene, advanceCutscene, skipCutscene, tickCutscene } from "./game/cutscene";
+import { WIN_STORY, LOSE_STORY } from "./game/story";
 import { applyUpgrade } from "./game/upgrades";
 import { TOTAL_DAYS } from "./game/balance";
 import { buildClick, enterBuild, exitBuild, rotateCursor, sellHovered } from "./game/placement";
@@ -42,6 +44,12 @@ const music = new WebMusic();
 
 const ctx: Ctx = { G, input, rng, fx, sfx, music };
 
+// Apply the persisted mute setting.
+if (G.muted) {
+  sfx.setMuted(true);
+  music.setMuted(true);
+}
+
 // Pause overlay (toggled outside the menu system).
 const pauseEl = document.createElement("div");
 pauseEl.className = "overlay";
@@ -56,8 +64,7 @@ function newRun(): void {
   meta.runs += 1;
   saveMeta(meta);
   G.day = 1;
-  startDay(ctx);
-  G.phase = "playing";
+  beginDay(ctx); // plays the intro cutscene, then opens night 1
 }
 
 const controller: GameController = {
@@ -67,8 +74,8 @@ const controller: GameController = {
     G.phase = "manage";
   },
   startNextShift: () => {
-    advanceDay(ctx);
-    G.phase = "playing";
+    G.day += 1;
+    beginDay(ctx);
   },
   enterBuild: () => {
     enterBuild(G);
@@ -82,6 +89,16 @@ const controller: GameController = {
   },
   togglePause: () => {
     if (G.phase === "playing") G.paused = !G.paused;
+  },
+  advanceCutscene: () => advanceCutscene(G),
+  skipCutscene: () => skipCutscene(G),
+  toggleMute: () => {
+    G.muted = !G.muted;
+    sfx.setMuted(G.muted);
+    music.setMuted(G.muted);
+    const m = loadMeta();
+    m.muted = G.muted;
+    saveMeta(m);
   },
 };
 
@@ -101,8 +118,8 @@ window.addEventListener("keydown", unlockAudio, { once: false });
 function endShift(): void {
   const res = finishDay(ctx);
   G.paused = false;
-  if (!res.passed) G.phase = "gameOver";
-  else if (res.isFinal) G.phase = "win";
+  if (!res.passed) startCutscene(G, LOSE_STORY, () => { G.phase = "gameOver"; }, "Closed");
+  else if (res.isFinal) startCutscene(G, WIN_STORY, () => { G.phase = "win"; }, "Finale");
   else G.phase = "dayEnd";
 }
 
@@ -115,6 +132,11 @@ function stepSim(dt: number): void {
 }
 
 function handleKeys(): void {
+  if (G.phase === "cutscene") {
+    if (input.pressed("Space") || input.pressed("Enter") || input.clickedOn("game")) advanceCutscene(G);
+    if (input.pressed("Escape")) skipCutscene(G);
+    return;
+  }
   if (input.pressed("KeyP")) controller.togglePause();
   if (G.phase === "playing" && !G.paused && (input.pressed("ShiftLeft") || input.pressed("ShiftRight"))) {
     startDash(ctx);
@@ -137,6 +159,11 @@ function frame(now: number): void {
 
   handleKeys();
   stepSim(dt);
+  if (G.phase === "cutscene") tickCutscene(G, dt);
+  if (G.dayCard) {
+    G.dayCard.t += dt;
+    if (G.dayCard.t > 3.0) G.dayCard = null;
+  }
 
   // Time-of-day follows the run's day (afternoon → night).
   if (G.day !== lastDay) {
@@ -179,6 +206,8 @@ interface TestApi {
   rotate: () => void;
   upgrade: (id: string) => boolean;
   stars: () => number;
+  skipStory: () => void;
+  advanceCutscene: () => void;
 }
 const api: TestApi = {
   G,
@@ -219,6 +248,11 @@ const api: TestApi = {
   rotate: () => rotateCursor(G),
   upgrade: (id) => applyUpgrade(G, id),
   stars: () => computeStars(G),
+  skipStory: () => {
+    let guard = 0;
+    while (G.phase === "cutscene" && guard++ < 50) skipCutscene(G);
+  },
+  advanceCutscene: () => advanceCutscene(G),
 };
 (window as unknown as { __G: typeof G; __SR: TestApi }).__G = G;
 (window as unknown as { __G: typeof G; __SR: TestApi }).__SR = api;

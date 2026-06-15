@@ -8,6 +8,7 @@ const PORT = 5179;
 const URL = `http://localhost:${PORT}`;
 const SMOKES = [
   "smoke-boot.mjs",
+  "smoke-story.mjs",
   "smoke-adjacency.mjs",
   "smoke-economy.mjs",
   "smoke-cook.mjs",

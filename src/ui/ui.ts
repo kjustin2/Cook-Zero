@@ -13,6 +13,8 @@ import { PRICE_LEVELS, QUOTAS, TOTAL_DAYS, HELPER_HIRE_COST, HELPER_UPGRADE_COST
 import { upgradeDef, applyUpgrade } from "../game/upgrades";
 import { buyItem, canAfford, hireHelper, upgradeHelper } from "../game/shop";
 import { setBrush } from "../game/placement";
+import { careerRank } from "../game/story";
+import { cutsceneText, currentBeat, lineComplete } from "../game/cutscene";
 import { loadMeta } from "../core/save";
 
 export interface GameController {
@@ -22,6 +24,9 @@ export interface GameController {
   enterBuild(): void;
   exitBuild(): void;
   togglePause(): void;
+  advanceCutscene(): void;
+  skipCutscene(): void;
+  toggleMute(): void;
 }
 
 type El = HTMLElement;
@@ -49,6 +54,10 @@ export class UI {
   private derived: El;
   private toast: El;
   private modChip: El;
+  private dayCardEl: El;
+  private dcTitle: El;
+  private dcSub: El;
+  private cs: { portrait: El; name: El; text: El; hint: El } | null = null;
   private refs: Record<string, El> = {};
   private lastPhase = "";
   private lastMod = "";
@@ -59,12 +68,16 @@ export class UI {
     this.toast = el("div", { class: "toast" });
     this.derived = el("div", { class: "derived" });
     this.modChip = el("div", { class: "modchip" });
+    this.dcTitle = el("div", { class: "dc-title" });
+    this.dcSub = el("div", { class: "dc-sub" });
+    this.dayCardEl = el("div", { class: "daycard" }, this.dcTitle, this.dcSub);
     this.overlay = el("div", { class: "overlay" });
-    root.append(this.hud, this.hint, this.toast, this.modChip, this.derived, this.overlay);
+    root.append(this.hud, this.hint, this.toast, this.modChip, this.dayCardEl, this.derived, this.overlay);
     this.hud.style.display = "none";
     this.hint.style.display = "none";
     this.toast.style.display = "none";
     this.modChip.style.display = "none";
+    this.dayCardEl.style.display = "none";
     this.derived.style.display = "none";
   }
 
@@ -141,6 +154,30 @@ export class UI {
     } else {
       this.derived.style.display = "none";
     }
+
+    // Cutscene typewriter.
+    if (G.phase === "cutscene" && G.cutscene && this.cs) {
+      const beat = currentBeat(G.cutscene);
+      if (beat) {
+        this.cs.portrait.textContent = beat.portrait;
+        this.cs.name.textContent = beat.speaker;
+        this.cs.name.style.color = beat.color ?? "#ffffff";
+        this.cs.text.textContent = cutsceneText(G.cutscene);
+        this.cs.hint.style.opacity = lineComplete(G.cutscene) ? "1" : "0.2";
+      }
+    }
+
+    // "Night N" title card (fades in/out over ~3s).
+    if (G.dayCard) {
+      const t = G.dayCard.t;
+      const fade = t < 0.3 ? t / 0.3 : t > 2.4 ? Math.max(0, (3.0 - t) / 0.6) : 1;
+      this.dayCardEl.style.display = "flex";
+      this.dayCardEl.style.opacity = String(fade);
+      this.dcTitle.textContent = G.dayCard.title;
+      this.dcSub.textContent = G.dayCard.sub;
+    } else {
+      this.dayCardEl.style.display = "none";
+    }
   }
 
   private updateHud(G: GameState): void {
@@ -179,8 +216,10 @@ export class UI {
   private onPhase(G: GameState): void {
     this.overlay.className = "overlay";
     this.overlay.replaceChildren();
+    this.cs = null;
     switch (G.phase) {
       case "title": this.renderTitle(); break;
+      case "cutscene": this.renderCutscene(); break;
       case "dayEnd": this.renderDayEnd(G); break;
       case "manage": this.renderManage(G); break;
       case "build": this.renderBuild(G); break;
@@ -190,21 +229,45 @@ export class UI {
     }
   }
 
+  private renderCutscene(): void {
+    this.overlay.className = "overlay cutscene-ov";
+    const portrait = el("div", { class: "cs-portrait" });
+    const name = el("div", { class: "cs-name" });
+    const text = el("div", { class: "cs-text" });
+    const hint = el("div", { class: "cs-hint" }, "▸ SPACE / click");
+    const box = el("div", { class: "cs-box clickable" },
+      portrait,
+      el("div", { class: "cs-body" }, name, text, hint));
+    box.addEventListener("click", () => this.ctrl.advanceCutscene());
+    const skip = btn("Skip ▸", "ghost small", () => this.ctrl.skipCutscene());
+    skip.classList.add("cs-skip");
+    this.overlay.replaceChildren(box, skip);
+    this.cs = { portrait, name, text, hint };
+  }
+
   private renderTitle(): void {
     const meta = loadMeta();
+    const muteBtn = btn(this.ctx.G.muted ? "🔇 Sound: Off" : "🔊 Sound: On", "ghost small", () => {
+      this.ctrl.toggleMute();
+      this.onPhase(this.ctx.G);
+    });
     this.overlay.append(
       el("h1", { class: "title-logo" }, "SIZZLE RUSH"),
-      el("div", { class: "subtitle" }, "Cook · Serve · Decorate · Run the joint"),
+      el("div", { class: "subtitle" }, "A failing diner. Six nights to save it."),
       el("div", { class: "panel center" },
-        el("div", { class: "small-muted" }, "Move WASD · Interact SPACE · Dash SHIFT · Pause P"),
-        el("div", { class: "small-muted" }, "Survive 6 dinner rushes. Between shifts, rebuild & decorate your kitchen — placement matters."),
-        el("div", { class: "stats-grid", style: "margin-top:12px" },
-          el("span", { class: "k" }, "Best day reached"), el("span", { class: "v" }, `${meta.bestDay}`),
+        el("div", { class: "rank-badge" }, "👨‍🍳 ", el("b", {}, careerRank(meta.bestDay))),
+        el("div", { class: "small-muted", style: "margin-top:8px" }, "Move WASD · Interact SPACE · Dash SHIFT · Pause P"),
+        el("div", { class: "small-muted" }, "Cook & serve, then rearrange & decorate your kitchen between shifts — placement matters."),
+        el("h3", {}, "Diner Records"),
+        el("div", { class: "stats-grid", style: "margin-top:2px" },
+          el("span", { class: "k" }, "Best night reached"), el("span", { class: "v" }, `${meta.bestDay}/${TOTAL_DAYS}`),
           el("span", { class: "k" }, "Best bank"), el("span", { class: "v" }, `$${meta.bestCoins}`),
           el("span", { class: "k" }, "Best combo"), el("span", { class: "v" }, `x${meta.bestCombo}`),
-          el("span", { class: "k" }, "Best day rating"), el("span", { class: "v" }, starStr(meta.bestStars))),
+          el("span", { class: "k" }, "Best night rating"), el("span", { class: "v" }, starStr(meta.bestStars)),
+          el("span", { class: "k" }, "Shifts worked"), el("span", { class: "v" }, `${meta.runs}`)),
+        el("div", { class: "row", style: "margin-top:12px" }, muteBtn),
       ),
-      btn("▶  Start Shift 1", "", () => this.ctrl.play()),
+      btn("▶  New Game", "", () => this.ctrl.play()),
     );
   }
 

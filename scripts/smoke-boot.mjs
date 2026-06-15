@@ -9,7 +9,7 @@ const fail = await withGame(async ({ page, check }) => {
   check("boots to title", await page.evaluate(() => window.__G.phase === "title"));
   await page.screenshot({ path: "shots/1-title.png" });
 
-  await page.evaluate(() => window.__SR.ctrl.play());
+  await page.evaluate(() => { window.__SR.ctrl.play(); window.__SR.skipStory(); });
   await page.waitForTimeout(300);
   check("starts a shift", await page.evaluate(() => window.__G.phase === "playing"));
 

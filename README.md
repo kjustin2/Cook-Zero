@@ -10,6 +10,11 @@ floor plan, and **placement matters** — a fan next to the grill speeds cooking
 plants up front calm your guests, neon draws a bigger crowd. You also **run the
 business**: set menu prices, grow your reputation, and hire a line cook.
 
+A light **story** frames it — a rookie chef inherits the failing "Sizzle Rush"
+diner with six nights to prove it can pay its way. It's told in skippable
+cutscenes (intro, mid-run beats, and a win/lose ending), with a "Night N" title
+card opening each shift and a career rank on the menu.
+
 ## Run it
 
 No global tooling needed (Node 18+).

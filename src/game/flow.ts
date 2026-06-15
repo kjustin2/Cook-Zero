@@ -11,6 +11,8 @@ import { recomputeDerived } from "./adjacency";
 import { rollModifier } from "./modifiers";
 import { rollShop } from "./shop";
 import { rollUpgrades } from "./upgrades";
+import { startCutscene } from "./cutscene";
+import { DAY_THEMES, storyForDay } from "./story";
 import { loadMeta, saveMeta } from "../core/save";
 
 /** Begin (or restart) the current day's shift. */
@@ -19,6 +21,7 @@ export function startDay(ctx: Ctx): void {
   s.dayTime = SHIFT_LEN;
   s.dayCoins = 0;
   s.quota = QUOTAS[Math.min(s.day - 1, QUOTAS.length - 1)];
+  s.dayCard = { title: `Night ${s.day}`, sub: DAY_THEMES[s.day - 1] ?? "", t: 0 };
   s.customers = [];
   s.spawnTimer = 1.6;
   s.combo = 0;
@@ -82,9 +85,15 @@ export function prepareManage(ctx: Ctx): void {
   s.manageTab = "shop";
 }
 
-export function advanceDay(ctx: Ctx): void {
-  ctx.G.day += 1;
-  startDay(ctx);
+/** Start a day, playing its opening cutscene first if it has one. */
+export function beginDay(ctx: Ctx): void {
+  const beats = storyForDay(ctx.G.day);
+  const go = () => {
+    startDay(ctx);
+    ctx.G.phase = "playing";
+  };
+  if (beats) startCutscene(ctx.G, beats, go, `Night ${ctx.G.day}`);
+  else go();
 }
 
 export function recordMeta(s: GameState): void {

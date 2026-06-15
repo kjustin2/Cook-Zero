@@ -48,8 +48,8 @@ const fail = await withGame(async ({ page, check }) => {
   // Boot → start the run.
   await page.evaluate(() => localStorage.clear());
   check("starts at title", (await phase()) === "title");
-  await clickText(/Start Shift/);
-  check("entered the first shift", (await phase()) === "playing", `phase=${await phase()}`);
+  await clickText(/New Game/);
+  check("New Game opens the intro cutscene", (await phase()) === "cutscene", `phase=${await phase()}`);
 
   // Navigate the whole run to victory.
   let won = false;
@@ -71,7 +71,9 @@ const fail = await withGame(async ({ page, check }) => {
     }
     if (stuck > 8) break;
 
-    if (p === "playing") {
+    if (p === "cutscene") {
+      await clickText(/Skip/);
+    } else if (p === "playing") {
       await forceEndShift(true);
     } else if (p === "dayEnd") {
       await clickText(/Manage Restaurant/);
@@ -92,10 +94,12 @@ const fail = await withGame(async ({ page, check }) => {
   check("win screen shows KITCHEN LEGEND", winText);
   await page.screenshot({ path: "shots/8-win.png" });
 
-  // Death path: play again, then fail day 1's quota.
+  // Death path: play again (skip intro), then fail day 1's quota.
   await clickText(/Play Again/);
+  await page.evaluate(() => window.__SR.skipStory());
   check("Play Again restarts the run", (await phase()) === "playing", `phase=${await phase()}`);
   await forceEndShift(false);
+  await page.evaluate(() => window.__SR.skipStory());
   check("missing quota → game over", (await phase()) === "gameOver", `phase=${await phase()}`);
   const firedText = await page.evaluate(() => document.body.innerText.includes("FIRED"));
   check("game-over screen shows YOU'RE FIRED", firedText);

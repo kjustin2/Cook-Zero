@@ -15,6 +15,7 @@ export class WebMusic implements Music {
   private step = 0;
   private intensity = 0;
   private running = false;
+  private muted = false;
 
   private ctx(): AudioContext | null {
     if (this.ac) return this.ac;
@@ -22,7 +23,7 @@ export class WebMusic implements Music {
       const Ctor = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
       this.ac = new Ctor();
       this.master = this.ac.createGain();
-      this.master.gain.value = 0.16;
+      this.master.gain.value = this.muted ? 0 : 0.16;
       this.master.connect(this.ac.destination);
     } catch {
       this.ac = null;
@@ -33,6 +34,11 @@ export class WebMusic implements Music {
   unlock(): void {
     const ac = this.ctx();
     if (ac && ac.state === "suspended") void ac.resume();
+  }
+
+  setMuted(m: boolean): void {
+    this.muted = m;
+    if (this.master) this.master.gain.value = m ? 0 : 0.16;
   }
 
   setIntensity(level: number): void {

@@ -10,6 +10,7 @@ const fail = await withGame(async ({ page, check }) => {
     const log = {};
 
     SR.ctrl.play();
+    SR.skipStory();
     log.playing = G.phase === "playing" && G.day === 1;
 
     // Clear the shift by meeting quota, then run the clock out.
@@ -39,18 +40,21 @@ const fail = await withGame(async ({ page, check }) => {
     SR.ctrl.startNextShift();
     log.nextDay = G.phase === "playing" && G.day === 2;
 
-    // Quota miss → game over.
+    // Quota miss → "closed" cutscene → game over.
     G.dayCoins = 0;
     G.dayTime = 0;
     SR.tick(0.1);
+    SR.skipStory();
     log.gameOver = G.phase === "gameOver";
 
-    // Win branch: clear the final day.
+    // Win branch: clear the final day → ending cutscene → win.
     SR.ctrl.play();
+    SR.skipStory();
     G.day = 6;
     G.dayCoins = 99999;
     G.dayTime = 0;
     SR.tick(0.1);
+    SR.skipStory();
     log.win = G.phase === "win";
 
     return log;

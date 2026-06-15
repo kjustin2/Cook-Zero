@@ -35,9 +35,14 @@ tile grid where **placement & adjacency drive gameplay bonuses**.
 
 **Phase machine (`src/main.ts`):**
 ```
-title → playing → dayEnd → manage ⇄ build → playing … → win (day 6 cleared)
-                                              → gameOver (quota missed)
+title → cutscene(intro) → playing → dayEnd → manage ⇄ build → [cutscene] → playing …
+        → cutscene(ending) → win (day 6 cleared)
+        → cutscene(closed) → gameOver (quota missed)
 ```
+A light diner-rescue story plays in cutscenes (`game/story.ts` data, `game/cutscene.ts`
+controller): an intro on New Game, beats before nights 3 & 5, and a win/lose ending. A
+"Night N — theme" title card (`G.dayCard`) opens each shift. The menu shows a career
+**rank** derived from `meta.bestDay` (`careerRank`).
 
 ## Architecture
 
@@ -54,7 +59,7 @@ never imports Three.js and runs headless in tests.
 | Grid | `game/grid.ts` | tile model, cell↔world coords, front-of-house weighting |
 | Adjacency | `game/adjacency.ts` | recomputes per-station cook bonuses + global `derived` knobs |
 | Sim | `game/{cooking,interact,chef,customers,serving,helper,sim}.ts` | the playing-state systems (chef.ts also holds `startDash`) |
-| Meta | `game/{upgrades,shop,placement,flow,modifiers}.ts` | roguelite upgrades, shop, build mode, day transitions, daily modifiers |
+| Meta | `game/{upgrades,shop,placement,flow,modifiers,story,cutscene}.ts` | upgrades, shop, build mode, day transitions, modifiers, story content, cutscene controller |
 | Render | `render/{stage,sceneView,kit,fx}.ts` + `render/{food,stations,decor,actors}.ts` | Three.js renderer/post (IBL env map + time-of-day), scene sync, FX, procedural meshes |
 | Audio | `audio/{sfx,music}.ts` | procedural WebAudio SFX + music (intensity follows combo) |
 | UI | `ui/ui.ts`, `style.css` | DOM HUD + every overlay screen |
@@ -102,9 +107,11 @@ never imports Three.js and runs headless in tests.
 
 - Smoke tests (`scripts/smoke-*.mjs`) use the shared `_harness.mjs` (auto-finds
   cached Chromium via `_chrome.mjs`). `npm test` (`run-smokes.mjs`) boots one dev
-  server and runs all 11 suites against it. Two complementary styles, both
+  server and runs all 12 suites against it. Cutscenes interrupt `play()` now, so
+  logic tests call `__SR.skipStory()` after `play()` to reach `playing`; real-DOM
+  tests click the cutscene **Skip** button. Two complementary styles, both
   Playwright headless:
-  - **Logic probes** (`boot/adjacency/economy/cook/events/systems/balance`) drive
+  - **Logic probes** (`boot/story/adjacency/economy/cook/events/systems/balance`) drive
     `window.__SR` directly (`tick`, `interact`, `place`, `buy`, `sell`, `upgrade`,
     `stars`, …) for deterministic assertions on cooking, scoring, adjacency, burns,
     build, upgrades, pricing payout, recipe gating, plate matching, star tiers, etc.

@@ -28,6 +28,10 @@ export class WebSfx implements Sfx {
     if (ac && ac.state === "suspended") void ac.resume();
   }
 
+  setMuted(m: boolean): void {
+    this.muted = m;
+  }
+
   private tone(freq: number, dur: number, type: OscillatorType, gain = 0.3, slideTo?: number): void {
     const ac = this.ctx();
     if (!ac || !this.master || this.muted) return;
