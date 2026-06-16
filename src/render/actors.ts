@@ -90,7 +90,7 @@ function pick(palette: number[], i: number): number {
 
 export interface ChefRig {
   group: THREE.Group;
-  update(dt: number, a: { walk: number; face: number; fire: number; carrying: boolean }): void;
+  update(dt: number, a: { walk: number; face: number; fire: number; carrying: boolean; cook: number }): void;
 }
 
 export function buildChef(opts: { helper?: boolean } = {}): ChefRig {
@@ -184,7 +184,7 @@ export function buildChef(opts: { helper?: boolean } = {}): ChefRig {
   let moving = 0; // smoothed 0..1
   const IDLE_PHASE = 1.7;
 
-  function update(dt: number, a: { walk: number; face: number; fire: number; carrying: boolean }): void {
+  function update(dt: number, a: { walk: number; face: number; fire: number; carrying: boolean; cook: number }): void {
     blinkT += dt;
     idleT += dt;
     // Periodic blink: squash both eyes' Y, fully reopening between blinks.
@@ -235,14 +235,25 @@ export function buildChef(opts: { helper?: boolean } = {}): ChefRig {
     torso.scale.x = 0.92 * (1 - stretch * 0.6);
     torso.scale.z = 0.82 * (1 - stretch * 0.6);
 
-    // Arms: swing opposite the legs, or raise forward together when carrying.
-    // A tiny idle arm jiggle (only when standing & empty-handed) makes the chef
-    // shuffle a little as if itching to cook; it returns to rest as `idle`→0.
-    const jiggle = Math.sin(idleT * 2.1 + IDLE_PHASE) * 0.018 * idle;
-    if (a.carrying) {
+    // Cook/chop action: a brisk two-handed pump in front, like flipping a patty
+    // or chopping at the board. Overrides the idle/walk arm pose while it lasts,
+    // easing out smoothly as the `cook` pulse decays (0..1) and adding a little
+    // forward lean + work-bob so the whole chef leans into the task.
+    const cook = Math.max(0, Math.min(1, a.cook));
+    body.rotation.x = cook * 0.12;
+    if (cook > 0.01) {
+      const pump = Math.sin(idleT * 32); // fast alternating chop
+      armL.position.set(-0.22, armRestY + 0.16 + pump * 0.14 * cook, 0.24);
+      armR.position.set(0.22, armRestY + 0.16 - pump * 0.14 * cook, 0.24);
+      body.position.y += Math.abs(Math.sin(idleT * 32)) * 0.025 * cook;
+    } else if (a.carrying) {
+      // Arms: raise forward together when carrying.
       armL.position.set(-0.24, armRestY + 0.1, 0.18);
       armR.position.set(0.24, armRestY + 0.1, 0.18);
     } else {
+      // A tiny idle arm jiggle (only when standing & empty-handed) makes the chef
+      // shuffle a little as if itching to cook; it returns to rest as `idle`→0.
+      const jiggle = Math.sin(idleT * 2.1 + IDLE_PHASE) * 0.018 * idle;
       armL.position.set(-0.32, armRestY + swingOpp * 0.05 + jiggle, swingOpp * 0.08);
       armR.position.set(0.32, armRestY + swing * 0.05 - jiggle, swing * 0.08);
     }

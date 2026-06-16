@@ -17,6 +17,7 @@ export interface Action {
 }
 
 const REACH = 2.55;
+const COOK_PULSE = 0.42; // how long the chef plays a cook/chop arm-pump
 
 const PART_LABEL: Record<string, string> = {
   patty: "patty",
@@ -125,6 +126,7 @@ export function actionFor(ctx: Ctx): Action | null {
             const idx = freeSlot(item);
             if (idx >= 0 && startSlot(item, idx, G.derived)) {
               G.carry = null;
+              chef.cookT = COOK_PULSE;
               ctx.sfx.place();
             }
           },
@@ -181,7 +183,10 @@ export function actionFor(ctx: Ctx): Action | null {
             label: "Pour soda",
             run: () => {
               const idx = freeSlot(item);
-              if (idx >= 0 && startSlot(item, idx, G.derived)) ctx.sfx.place();
+              if (idx >= 0 && startSlot(item, idx, G.derived)) {
+                chef.cookT = COOK_PULSE;
+                ctx.sfx.place();
+              }
             },
           }));
         }
@@ -204,6 +209,7 @@ export function actionFor(ctx: Ctx): Action | null {
           run: () => {
             pl.push(part);
             G.carry = null;
+            chef.cookT = COOK_PULSE;
             ctx.sfx.chop();
             ctx.fx.burst(x, z + 0.2, 0xffffff, 4);
           },

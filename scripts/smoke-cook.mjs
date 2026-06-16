@@ -24,6 +24,7 @@ const fail = await withGame(async ({ page, check }) => {
     goTo(grill.col, grill.row);
     SR.interact();
     log.placed = G.carry === null;
+    log.cookPulse = G.chef.cookT > 0; // placing on the grill kicks the chop/cook arm-pump
 
     SR.tickN(1 / 30, 270); // ~9s — past cook, before burn (fan-boosted grill)
 
@@ -66,6 +67,7 @@ const fail = await withGame(async ({ page, check }) => {
 
   check("grabbed a raw patty", r.grabbed);
   check("placed it on the grill", r.placed);
+  check("cooking triggers the chef's cook/chop animation", r.cookPulse);
   check("pulled a cooked patty", r.took, `quality=${r.quality}`);
   check("started a plate with the patty", r.platedPatty);
   check("assembled bun+patty plate", r.hasPlate);

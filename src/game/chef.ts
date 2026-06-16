@@ -135,6 +135,7 @@ export function updateChef(ctx: Ctx, dt: number): void {
 
   // Interact.
   if (chef.interactCD > 0) chef.interactCD -= dt;
+  if (chef.cookT > 0) chef.cookT -= dt;
   const action = actionFor(ctx);
   G.hint = action ? action.label : "";
   if (action && input.pressed("Space") && chef.interactCD <= 0) {

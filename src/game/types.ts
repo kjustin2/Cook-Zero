@@ -258,6 +258,7 @@ export interface Chef {
   face: number; // heading angle (radians)
   walk: number; // gait phase
   interactCD: number; // debounce on the interact key
+  cookT: number; // >0 = playing a hands-on cook/chop action (drives the rig arm-pump)
   fire: number; // 0..1 on-fire glow (combo)
   dashT: number; // remaining dash time (>0 = dashing)
   dashCD: number; // dash cooldown remaining

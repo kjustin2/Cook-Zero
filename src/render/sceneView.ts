@@ -42,6 +42,16 @@ interface ItemView {
   defId: string;
   light?: THREE.PointLight;
 }
+/** How a piece of food on a slot moves: patties somersault-flip on the grill,
+ *  fries shimmy in the fryer, everything else does a gentle living bob. */
+type SlotMotion = "flip" | "shake" | "bob";
+interface SlotEntry {
+  group: THREE.Group;
+  sig: string;
+  phase: number;
+  motion: SlotMotion;
+  bornTime: number; // this.time when (re)built — drives the placement pop
+}
 interface CustView {
   rig: CustomerRig;
   bubble: THREE.Group;
@@ -55,7 +65,7 @@ export class SceneView {
   private camera: THREE.PerspectiveCamera;
 
   private itemViews = new Map<number, ItemView>();
-  private slotFood = new Map<string, { group: THREE.Group; sig: string; phase: number }>();
+  private slotFood = new Map<string, SlotEntry>();
   private custViews = new Map<number, CustView>();
   private chef: ChefRig;
   private helper: ChefRig;
@@ -308,16 +318,57 @@ export class SceneView {
     }
   }
 
-  /** Place an entry at a station's local slot anchor (reuses a scratch vector),
-   *  with a little sizzle bob so cooking food feels alive. */
-  private placeAtSlot(entry: { group: THREE.Group; phase: number }, view: ItemView | undefined, local: THREE.Vector3 | undefined): void {
+  /** Place an entry at a station's local slot anchor (reuses a scratch vector)
+   *  and animate it: a patty somersault-flip on the grill, a fryer shimmy, or a
+   *  gentle sizzle bob — plus a squash-stretch "pop" the moment it's placed. */
+  private placeAtSlot(entry: SlotEntry, view: ItemView | undefined, local: THREE.Vector3 | undefined): void {
     if (!view) return;
     this.scratch.copy(local ?? FOOD_ANCHOR);
     view.group.localToWorld(this.scratch);
-    entry.group.position.copy(this.scratch);
-    entry.group.position.y += Math.abs(Math.sin(this.time * 7 + entry.phase)) * 0.05;
-    entry.group.rotation.z = Math.sin(this.time * 3.4 + entry.phase) * 0.08;
-    entry.group.rotation.y = Math.sin(this.time * 1.6 + entry.phase) * 0.12;
+    const g = entry.group;
+    g.position.copy(this.scratch);
+    const t = this.time + entry.phase;
+    let yLift = 0;
+
+    if (entry.motion === "flip") {
+      // Toss the patty for a satisfying somersault every couple of seconds; a
+      // high arc so the wide puck clears the griddle as it turns over. Gentle
+      // sizzle jitter between flips.
+      const period = 2.4;
+      const lt = ((t % period) + period) % period;
+      const flipDur = 0.6;
+      if (lt < flipDur) {
+        const f = lt / flipDur; // 0..1 through the flip
+        yLift = Math.sin(f * Math.PI) * 0.85; // leap up and back down
+        g.rotation.set(f * Math.PI * 2, 0, Math.sin(f * Math.PI) * 0.2);
+      } else {
+        yLift = Math.abs(Math.sin(t * 7)) * 0.04;
+        g.rotation.set(0, 0, Math.sin(t * 3.4) * 0.05);
+      }
+    } else if (entry.motion === "shake") {
+      // Fryer basket shimmy: a quick side-to-side jiggle.
+      g.position.x += Math.sin(t * 24) * 0.03;
+      yLift = Math.abs(Math.sin(t * 15)) * 0.05;
+      g.rotation.set(0, 0, Math.sin(t * 20) * 0.1);
+    } else {
+      // Gentle living bob (plates, soda, burnt scraps).
+      yLift = Math.abs(Math.sin(t * 4)) * 0.03;
+      g.rotation.set(0, Math.sin(t * 1.6) * 0.12, Math.sin(t * 2.6) * 0.05);
+    }
+
+    // Placement pop: squash-stretch up to full size over the first ~1/3 s so food
+    // landing on a slot (and each part added to a plate) feels tactile.
+    const age = this.time - entry.bornTime;
+    g.scale.setScalar(age < 0.34 ? 0.45 + 0.55 * easeOutBack(age / 0.34) : 1);
+
+    g.position.y += yLift;
+  }
+
+  /** Choose the slot animation for a freshly-built food kind. */
+  private motionFor(kind: FoodKind): SlotMotion {
+    if (kind === "patty" || kind === "patty_raw") return "flip";
+    if (kind === "fries") return "shake";
+    return "bob";
   }
 
   private syncSlotFood(its: PlacedItem[]): void {
@@ -342,7 +393,7 @@ export class SceneView {
           }
           const g = buildFood(kind, quality);
           this.scene.add(g);
-          entry = { group: g, sig, phase: it.uid * 0.9 + i };
+          entry = { group: g, sig, phase: it.uid * 0.9 + i, motion: this.motionFor(kind), bornTime: this.time };
           this.slotFood.set(key, entry);
         }
         this.placeAtSlot(entry, view, slots[i]);
@@ -360,7 +411,7 @@ export class SceneView {
           }
           const g = buildPlate(it.plate);
           this.scene.add(g);
-          entry = { group: g, sig, phase: it.uid * 0.9 };
+          entry = { group: g, sig, phase: it.uid * 0.9, motion: "bob", bornTime: this.time };
           this.slotFood.set(key, entry);
         }
         this.placeAtSlot(entry, view, slots[0]);
@@ -377,14 +428,15 @@ export class SceneView {
 
   private syncChef(G: GameState, dt: number): void {
     this.chef.group.position.set(G.chef.x, 0, G.chef.z);
-    this.chef.update(dt, { walk: G.chef.walk, face: G.chef.face, fire: G.chef.fire, carrying: G.carry !== null });
+    const cook = Math.min(1, G.chef.cookT / 0.42);
+    this.chef.update(dt, { walk: G.chef.walk, face: G.chef.face, fire: G.chef.fire, carrying: G.carry !== null, cook });
   }
 
   private syncHelper(G: GameState, dt: number): void {
     this.helper.group.visible = G.helper.hired;
     if (!G.helper.hired) return;
     this.helper.group.position.set(G.helper.x, 0, G.helper.z);
-    this.helper.update(dt, { walk: 4, face: Math.PI, fire: 0, carrying: false });
+    this.helper.update(dt, { walk: 4, face: Math.PI, fire: 0, carrying: false, cook: 0 });
   }
 
   private syncCustomers(G: GameState, dt: number): void {

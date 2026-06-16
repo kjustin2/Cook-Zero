@@ -98,7 +98,7 @@ export function createState(seed: number): GameState {
     recipes: RECIPES,
     helper: { hired: false, level: 1, wage: 0, x: 0, z: 0, targetUid: null, cooldown: 0 },
 
-    chef: { x: 0, z: 5.0, vx: 0, vz: 0, face: 0, walk: 0, interactCD: 0, fire: 0, dashT: 0, dashCD: 0, dashX: 0, dashZ: 0 },
+    chef: { x: 0, z: 5.0, vx: 0, vz: 0, face: 0, walk: 0, interactCD: 0, cookT: 0, fire: 0, dashT: 0, dashCD: 0, dashX: 0, dashZ: 0 },
     customers: [],
     carry: null,
     spawnTimer: 1.5,
