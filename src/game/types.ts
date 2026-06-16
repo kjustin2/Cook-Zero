@@ -138,6 +138,12 @@ export interface Cell {
   item: PlacedItem | null;
 }
 
+/** A dining table the player can place/move along the dining row. */
+export interface TableInst {
+  uid: number;
+  col: number; // dining-row column index (0..DINING_COLS-1)
+}
+
 export interface Grid {
   cols: number;
   rows: number;
@@ -327,6 +333,8 @@ export interface GameState {
   upgrades: Record<string, number>; // upgrade id → stacks owned
 
   grid: Grid;
+  /** Dining tables, arrangeable in build mode (drives seating + collision). */
+  tables: TableInst[];
   /** Owned-but-unplaced items available in build mode (counts by defId). */
   inventory: Record<string, number>;
   recipes: Recipe[]; // run's recipe pool (unlocked flags vary)
@@ -366,4 +374,10 @@ export interface BuildState {
   movingUid: number | null;
   /** The lifted item while moving (off-grid until dropped). */
   movingItem?: PlacedItem | null;
+  /** Dining-area cursor: when the mouse is over the dining floor, the build
+   *  cursor snaps to a table column instead of a kitchen cell. */
+  inDining: boolean;
+  diningCol: number;
+  /** A table lifted for moving (off the floor until dropped). */
+  movingTable?: TableInst | null;
 }

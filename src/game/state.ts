@@ -4,6 +4,7 @@
 import type { Derived, GameState, Mods, PlacedItem } from "./types";
 import { RECIPES } from "./catalog";
 import { createGrid, place } from "./grid";
+import { DEFAULT_TABLE_COLS } from "./dining";
 import { recomputeDerived } from "./adjacency";
 import { loadMeta } from "../core/save";
 import {
@@ -94,6 +95,7 @@ export function createState(seed: number): GameState {
     upgrades: {},
 
     grid,
+    tables: DEFAULT_TABLE_COLS.map((col) => ({ uid: nextUid(), col })),
     inventory: { plant: 1, lamp: 1 },
     recipes: RECIPES,
     helper: { hired: false, level: 1, wage: 0, x: 0, z: 0, targetUid: null, cooldown: 0 },
@@ -108,7 +110,7 @@ export function createState(seed: number): GameState {
     floats: [],
 
     hint: "",
-    build: { active: false, brush: null, cursorCol: 4, cursorRow: 2, rot: 0, movingUid: null },
+    build: { active: false, brush: null, cursorCol: 4, cursorRow: 2, rot: 0, movingUid: null, inDining: false, diningCol: 4 },
     manageTab: "shop",
     shopOffer: [],
     upgradeOffer: [],

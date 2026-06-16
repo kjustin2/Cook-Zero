@@ -6,7 +6,7 @@ import type { Customer, CustomerKind, GameState, Recipe } from "./types";
 import type { Ctx } from "./ctx";
 import { RECIPES } from "./catalog";
 import { SHIFT_LEN, SPAWN_BASE, REP_EXPIRE, CUSTOMER_KINDS } from "./balance";
-import { TABLES, TABLE_COUNT, ENTRANCE, EXIT, seatOf } from "./dining";
+import { ENTRANCE, EXIT, seatOf } from "./dining";
 import { nextUid } from "./state";
 import { clamp, lerp, dist } from "../core/math";
 
@@ -32,7 +32,7 @@ function availableRecipes(s: GameState): Recipe[] {
 
 function freeTable(s: GameState): number {
   const used = new Set(s.customers.filter((c) => c.state !== "leaving").map((c) => c.spot));
-  for (let i = 0; i < TABLE_COUNT; i++) if (!used.has(i)) return i;
+  for (let i = 0; i < s.tables.length; i++) if (!used.has(i)) return i;
   return -1;
 }
 
@@ -150,7 +150,7 @@ export function updateCustomers(ctx: Ctx, dt: number): void {
 
   for (const c of G.customers) {
     c.bob += dt;
-    const table = TABLES[c.spot];
+    const table = G.tables[c.spot];
     const seat = table ? seatOf(table) : null;
     switch (c.state) {
       case "walkin": {

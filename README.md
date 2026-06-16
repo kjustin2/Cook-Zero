@@ -39,7 +39,8 @@ npm start          # = vite build + electron .
 - **Shift** — dash (short burst, ~1s cooldown)
 - **P** / **Esc** — pause menu (Resume, Restart, settings, Quit to Title)
 - In the **Floor Plan** (build mode): click to place/pick up, **R** rotate,
-  **X** sell, **Esc** done
+  **X** sell, **Esc** done — and out on the **dining floor**, click to add/move a
+  table (**X** removes one)
 
 ## Gameplay loop
 
@@ -52,9 +53,10 @@ npm start          # = vite build + electron .
 3. **Manage** between shifts: shop for stations & decor, pick a roguelite
    upgrade, set your **pricing** (price vs. patience vs. crowd size), and hire /
    upgrade a **line cook** who tends your grills.
-4. **Decorate** your floor plan. The live *Kitchen Effects* panel shows exactly
-   how your layout changes cook speed, patience, tips, combo window, reputation
-   gain and crowd size.
+4. **Decorate** your floor plan and **arrange the dining room** — add, move and
+   remove tables out on the dining floor. The live *Kitchen Effects* panel shows
+   exactly how your layout changes cook speed, patience, tips, combo window,
+   reputation gain and crowd size.
 
 ## Tech
 

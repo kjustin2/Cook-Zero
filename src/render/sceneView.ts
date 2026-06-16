@@ -8,7 +8,7 @@ import type { GameState, Carry, IngredientId, PlacedItem, PlatePart } from "../g
 import type { Input } from "../core/input";
 import { def, RECIPES } from "../game/catalog";
 import { items, worldOfCell, cellOfWorld, TILE, COUNTER_Z, CUSTOMER_Z } from "../game/grid";
-import { TABLES, GAP_HALF, HALF_W } from "../game/dining";
+import { GAP_HALF, HALF_W, DINING_COLS, tableWorld, diningColOf, inDiningZone } from "../game/dining";
 import { pullQuality } from "../game/cooking";
 import { Stage } from "./stage";
 import { buildStation } from "./stations";
@@ -16,7 +16,7 @@ import { buildDecor } from "./decor";
 import { buildFood, buildPlate, type FoodKind, type FoodQuality } from "./food";
 import { buildChef, buildCustomer, type ChefRig, type CustomerRig } from "./actors";
 import { stdMat, box, cyl, sphere, group, canvasTex, disposeTree } from "./kit";
-import { damp, easeOutBack } from "../core/math";
+import { clamp, damp, easeOutBack } from "../core/math";
 
 /** Dispose only geometries in a subtree (leaves materials alone — used for actor
  *  rigs that share module-level eye/glint materials across instances). */
@@ -25,6 +25,28 @@ function disposeGeom(obj: THREE.Object3D): void {
     const m = o as THREE.Mesh;
     if (m.geometry) m.geometry.dispose();
   });
+}
+
+/** A cute round dining table with two cushioned stools (origin at its base). */
+function buildTableMesh(): THREE.Group {
+  const woodMat = stdMat(0x9c5a2e, { rough: 0.6 });
+  const t = group();
+  const topT = cyl(0.72, 0.72, 0.12, stdMat(0xcf8f55, { rough: 0.45 }), 18);
+  topT.position.y = 0.92;
+  const ped = cyl(0.13, 0.18, 0.9, woodMat, 10);
+  ped.position.y = 0.46;
+  const base = cyl(0.42, 0.42, 0.08, woodMat, 14);
+  base.position.y = 0.04;
+  t.add(topT, ped, base);
+  const cushMat = stdMat(0xff8fae, { rough: 0.7 });
+  for (const sz of [0.98, -0.98]) {
+    const seat = cyl(0.26, 0.26, 0.12, cushMat, 12);
+    seat.position.set(0, 0.5, sz);
+    const leg = cyl(0.05, 0.07, 0.5, woodMat, 8);
+    leg.position.set(0, 0.22, sz);
+    t.add(seat, leg);
+  }
+  return t;
 }
 
 const FOOD_ANCHOR = new THREE.Vector3(0, 1.1, 0); // fallback slot height
@@ -68,6 +90,8 @@ export class SceneView {
   private itemViews = new Map<number, ItemView>();
   private slotFood = new Map<string, SlotEntry>();
   private custViews = new Map<number, CustView>();
+  private tableViews = new Map<number, THREE.Group>();
+  private tableGhost: THREE.Group | null = null;
   private chef: ChefRig;
   private helper: ChefRig;
   private carryHolder = new THREE.Group();
@@ -104,29 +128,6 @@ export class SceneView {
     this.cursorTile.position.y = 0.03;
     this.cursorTile.visible = false;
     this.scene.add(this.cursorTile);
-  }
-
-  /** A cute round dining table with two cushioned stools. */
-  private buildTable(x: number, z: number): void {
-    const woodMat = stdMat(0x9c5a2e, { rough: 0.6 });
-    const t = group();
-    const topT = cyl(0.72, 0.72, 0.12, stdMat(0xcf8f55, { rough: 0.45 }), 18);
-    topT.position.y = 0.92;
-    const ped = cyl(0.13, 0.18, 0.9, woodMat, 10);
-    ped.position.y = 0.46;
-    const base = cyl(0.42, 0.42, 0.08, woodMat, 14);
-    base.position.y = 0.04;
-    t.add(topT, ped, base);
-    const cushMat = stdMat(0xff8fae, { rough: 0.7 });
-    for (const sz of [0.98, -0.98]) {
-      const seat = cyl(0.26, 0.26, 0.12, cushMat, 12);
-      seat.position.set(0, 0.5, sz);
-      const leg = cyl(0.05, 0.07, 0.5, woodMat, 8);
-      leg.position.set(0, 0.22, sz);
-      t.add(seat, leg);
-    }
-    t.position.set(x, 0, z);
-    this.scene.add(t);
   }
 
   // ── Static environment ──────────────────────────────────────────────────
@@ -179,8 +180,7 @@ export class SceneView {
       body.position.set(cx, 0.5, COUNTER_Z);
       this.scene.add(top, body);
     }
-    // Dining tables + stools.
-    for (const tb of TABLES) this.buildTable(tb.x, tb.z);
+    // (Dining tables are placed dynamically from G.tables in syncTables.)
 
     // Restaurant back wall (behind the customers) with glowing windows + neon.
     const wallZ = CUSTOMER_Z - 3.4;
@@ -269,6 +269,7 @@ export class SceneView {
   update(G: GameState, dt: number, input: Input): void {
     const its = items(G.grid); // compute the placed-item list once per frame
     this.syncLayout(G, its);
+    this.syncTables(G);
     this.syncSlotFood(its);
     this.syncChef(G, dt);
     this.syncHelper(G, dt);
@@ -315,6 +316,29 @@ export class SceneView {
         this.scene.remove(v.group);
         disposeTree(v.group);
         this.itemViews.delete(uid);
+      }
+    }
+  }
+
+  /** Sync the dining tables to G.tables — the player arranges these in build mode. */
+  private syncTables(G: GameState): void {
+    const live = new Set<number>();
+    for (const t of G.tables) {
+      live.add(t.uid);
+      let g = this.tableViews.get(t.uid);
+      if (!g) {
+        g = buildTableMesh();
+        this.scene.add(g);
+        this.tableViews.set(t.uid, g);
+      }
+      const { x, z } = tableWorld(t.col);
+      g.position.set(x, 0, z);
+    }
+    for (const [uid, g] of this.tableViews) {
+      if (!live.has(uid)) {
+        this.scene.remove(g);
+        disposeTree(g);
+        this.tableViews.delete(uid);
       }
     }
   }
@@ -588,6 +612,7 @@ export class SceneView {
     if (!G.build.active) {
       this.cursorTile.visible = false;
       if (this.ghost) this.ghost.visible = false;
+      if (this.tableGhost) this.tableGhost.visible = false;
       return;
     }
     // Pick hovered cell from the mouse ray against the floor.
@@ -598,10 +623,45 @@ export class SceneView {
     this.ray.setFromCamera(ndc, this.camera);
     const hit = new THREE.Vector3();
     if (this.ray.ray.intersectPlane(this.groundPlane, hit)) {
-      const { col, row } = cellOfWorld(G.grid, hit.x, hit.z);
-      G.build.cursorCol = col;
-      G.build.cursorRow = row;
+      if (inDiningZone(hit.z)) {
+        G.build.inDining = true;
+        G.build.diningCol = clamp(diningColOf(hit.x), 0, DINING_COLS - 1);
+      } else {
+        G.build.inDining = false;
+        const { col, row } = cellOfWorld(G.grid, hit.x, hit.z);
+        G.build.cursorCol = col;
+        G.build.cursorRow = row;
+      }
     }
+
+    // ── Arranging tables out on the dining floor ──
+    if (G.build.inDining) {
+      const tw = tableWorld(G.build.diningCol);
+      const occupied = G.tables.some((t) => t.col === G.build.diningCol);
+      const invalid = !!G.build.movingTable && occupied;
+      this.cursorTile.visible = true;
+      this.cursorTile.position.set(tw.x, 0.03, tw.z);
+      (this.cursorTile.material as THREE.MeshBasicMaterial).color.setHex(invalid ? 0xff5a5a : 0x66ff99);
+      if (this.ghost) this.ghost.visible = false;
+      if (!this.tableGhost) {
+        this.tableGhost = buildTableMesh();
+        this.tableGhost.traverse((o) => {
+          const m = (o as THREE.Mesh).material as THREE.Material | undefined;
+          if (m) {
+            m.transparent = true;
+            m.opacity = 0.5;
+          }
+        });
+        this.scene.add(this.tableGhost);
+      }
+      // Preview a table only where one would actually land (drop spot or new add).
+      const showGhost = !!G.build.movingTable || !occupied;
+      this.tableGhost.visible = showGhost;
+      if (showGhost) this.tableGhost.position.set(tw.x, 0.04, tw.z);
+      return;
+    }
+    if (this.tableGhost) this.tableGhost.visible = false;
+
     const { x, z } = worldOfCell(G.grid, G.build.cursorCol, G.build.cursorRow);
     const occupied = !!G.grid.cells[G.build.cursorRow * G.grid.cols + G.build.cursorCol]?.item;
     this.cursorTile.visible = true;

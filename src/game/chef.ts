@@ -5,7 +5,7 @@ import type { Ctx } from "./ctx";
 import type { Chef } from "./types";
 import { actionFor } from "./interact";
 import { cellOfWorld, isSolidAt, worldOfCell, TILE } from "./grid";
-import { BARRIERS, DINING_MIN_Z } from "./dining";
+import { barriersFor, DINING_MIN_Z, type AABB } from "./dining";
 import { DASH_CD, DASH_MULT, DASH_TIME } from "./balance";
 import { clamp, damp } from "../core/math";
 
@@ -13,9 +13,9 @@ const MOVE_SPEED = 6.6;
 const CHEF_R = 0.42;
 const CELL_HALF = TILE * 0.38; // solid footprint half-extent (gaps to walk)
 
-/** Resolve the chef circle out of the static dining colliders (counter + tables). */
-function resolveBarriersAxis(chef: Chef, axis: "x" | "z"): void {
-  for (const b of BARRIERS) {
+/** Resolve the chef circle out of the dining colliders (counter + tables). */
+function resolveBarriersAxis(chef: Chef, barriers: AABB[], axis: "x" | "z"): void {
+  for (const b of barriers) {
     const minX = b.minX - CHEF_R;
     const maxX = b.maxX + CHEF_R;
     const minZ = b.minZ - CHEF_R;
@@ -108,12 +108,13 @@ export function updateChef(ctx: Ctx, dt: number): void {
     chef.vz = damp(chef.vz, nz * speed, 18, dt);
   }
 
+  const barriers = barriersFor(G.tables);
   chef.x += chef.vx * dt;
   resolveAxis(ctx, "x");
-  resolveBarriersAxis(chef, "x");
+  resolveBarriersAxis(chef, barriers, "x");
   chef.z += chef.vz * dt;
   resolveAxis(ctx, "z");
-  resolveBarriersAxis(chef, "z");
+  resolveBarriersAxis(chef, barriers, "z");
 
   // Play-area bounds — the chef may now roam the dining floor (front of counter).
   const halfW = (G.grid.cols / 2) * TILE + 0.6;

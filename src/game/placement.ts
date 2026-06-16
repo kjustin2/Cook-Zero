@@ -3,12 +3,13 @@
 // the hovered cell into G.build.cursorCol/Row (via mouse picking) each frame;
 // this module turns clicks/keys into grid edits and re-derives bonuses.
 
-import type { GameState, PlacedItem } from "./types";
+import type { GameState, PlacedItem, TableInst } from "./types";
 import type { Ctx } from "./ctx";
 import { def } from "./catalog";
 import { cellAt, itemAt, place, removeAt } from "./grid";
+import { DINING_COLS } from "./dining";
 import { recomputeDerived } from "./adjacency";
-import { makeItem } from "./state";
+import { makeItem, nextUid } from "./state";
 
 export const REFUND_RATE = 0.6;
 
@@ -16,6 +17,8 @@ export function enterBuild(s: GameState): void {
   s.build.active = true;
   s.build.brush = null;
   s.build.movingUid = null;
+  s.build.inDining = false;
+  s.build.movingTable = null;
 }
 
 export function exitBuild(s: GameState): void {
@@ -29,8 +32,14 @@ export function exitBuild(s: GameState): void {
     }
     s.build.movingUid = null;
   }
+  // Drop a lifted table back where it was so none is lost.
+  if (s.build.movingTable) {
+    s.tables.push(s.build.movingTable);
+    s.build.movingTable = null;
+  }
   s.build.active = false;
   s.build.brush = null;
+  s.build.inDining = false;
   recomputeDerived(s);
 }
 
@@ -51,11 +60,58 @@ function returnMoving(s: GameState): void {
     s.build.movingItem = null;
   }
   s.build.movingUid = null;
+  if (s.build.movingTable) {
+    s.tables.push(s.build.movingTable);
+    s.build.movingTable = null;
+  }
+}
+
+const tableAtCol = (s: GameState, col: number): TableInst | undefined => s.tables.find((t) => t.col === col);
+
+/** A build click out on the dining floor: drop a lifted table, pick one up to
+ *  move it, or add a new table to an empty slot. */
+function diningClick(ctx: Ctx): void {
+  const s = ctx.G;
+  const col = s.build.diningCol;
+
+  if (s.build.movingTable) {
+    if (tableAtCol(s, col)) {
+      ctx.sfx.error(); // slot taken
+      return;
+    }
+    s.build.movingTable.col = col;
+    s.tables.push(s.build.movingTable);
+    s.build.movingTable = null;
+    ctx.sfx.build();
+    return;
+  }
+
+  const here = tableAtCol(s, col);
+  if (here) {
+    // Lift it off the floor to move it.
+    s.tables = s.tables.filter((t) => t.uid !== here.uid);
+    s.build.movingTable = here;
+    ctx.sfx.grab();
+    return;
+  }
+
+  // Empty slot → set down a brand-new table (capped at one per column).
+  if (s.tables.length < DINING_COLS) {
+    s.tables.push({ uid: nextUid(), col });
+    ctx.sfx.build();
+  } else {
+    ctx.sfx.error();
+  }
 }
 
 /** Primary build click at the hovered cell. */
 export function buildClick(ctx: Ctx): void {
   const s = ctx.G;
+  // Out on the dining floor we arrange tables, not kitchen cells.
+  if (s.build.inDining) {
+    diningClick(ctx);
+    return;
+  }
   const col = s.build.cursorCol;
   const row = s.build.cursorRow;
   const cell = cellAt(s.grid, col, row);
@@ -112,6 +168,28 @@ export function buildClick(ctx: Ctx): void {
 /** Sell the item under the cursor (or the one being moved) for a refund. */
 export function sellHovered(ctx: Ctx): void {
   const s = ctx.G;
+  // On the dining floor, X removes a table (keeping at least one).
+  if (s.build.inDining) {
+    if (s.build.movingTable) {
+      if (s.tables.length >= 1) {
+        s.build.movingTable = null;
+        ctx.sfx.build();
+        s.toast = { text: "Removed a table", t: 0 };
+      } else {
+        ctx.sfx.error();
+      }
+      return;
+    }
+    const t = tableAtCol(s, s.build.diningCol);
+    if (t && s.tables.length > 1) {
+      s.tables = s.tables.filter((x) => x.uid !== t.uid);
+      ctx.sfx.build();
+      s.toast = { text: "Removed a table", t: 0 };
+    } else {
+      ctx.sfx.error();
+    }
+    return;
+  }
   let target: PlacedItem | null = s.build.movingItem ?? itemAt(s.grid, s.build.cursorCol, s.build.cursorRow);
   if (!target) return;
   const d = def(target.defId);

@@ -32,7 +32,8 @@ on grill/fryer/soda stations, assembles plates on prep counters, then **leaves
 the kitchen** (through a gap in the front counter) to **serve at the table**. Runs
 are **6 shifts** of 120s with a cash quota. Between shifts the player shops,
 picks an upgrade, sets pricing, and **rearranges/decorates the kitchen** on a
-tile grid where **placement & adjacency drive gameplay bonuses**.
+tile grid where **placement & adjacency drive gameplay bonuses** — and also
+**arranges the dining tables** (add/move/remove) out on the dining floor.
 
 **Phase machine (`src/main.ts`):**
 ```
@@ -66,7 +67,7 @@ never imports Three.js and runs headless in tests.
 | Data | `game/catalog.ts` | `RECIPES`, `CATALOG` (stations + decor with adjacency/global bonuses), cook rules |
 | Grid | `game/grid.ts` | tile model, cell↔world coords, front-of-house weighting |
 | Adjacency | `game/adjacency.ts` | recomputes per-station cook bonuses + global `derived` knobs |
-| Sim | `game/{cooking,interact,chef,customers,serving,helper,sim,dining}.ts` | the playing-state systems (chef.ts also holds `startDash`; `dining.ts` = table-service geometry: `TABLES`, the counter gap, static collision `BARRIERS`, `ENTRANCE`/`EXIT`, `SERVE_REACH`) |
+| Sim | `game/{cooking,interact,chef,customers,serving,helper,sim,dining}.ts` | the playing-state systems (chef.ts also holds `startDash`; `dining.ts` = table-service geometry: a **dining row** the player arranges tables across (`DINING_COLS`, `tableWorld`/`diningColOf`/`inDiningZone`, `seatOf`), the counter gap, `barriersFor(tables)` collision (counter segments + each placed table), `ENTRANCE`/`EXIT`, `SERVE_REACH`) |
 | Meta | `game/{upgrades,shop,placement,flow,modifiers,story,cutscene}.ts` | upgrades, shop, build mode, day transitions, modifiers, story content, cutscene controller |
 | Render | `render/{stage,sceneView,kit,fx}.ts` + `render/{food,stations,decor,actors}.ts` | Three.js renderer/post (IBL env map + time-of-day), scene sync, FX, procedural meshes |
 | Audio | `audio/{sfx,music}.ts` | procedural WebAudio SFX + music (intensity follows combo) |
@@ -86,9 +87,16 @@ combo HUD bump — re-triggered via the `void el.offsetWidth` reflow trick.
 - **The floor plan is the kitchen.** Stations + decor occupy a `GRID_COLS×GRID_ROWS`
   grid (`balance.ts`); the chef roams continuously and collides with solid cells.
   Row 0 is nearest the counter (front of house); decor up front is worth more vibe.
-  The chef also collides with the static dining `BARRIERS` (two counter segments +
-  the tables, `dining.ts`) and may cross the central counter gap onto the dining
-  floor to serve; bounds run from `DINING_MIN_Z` (front) to the back of the kitchen.
+  The chef also collides with the dining colliders (`barriersFor(G.tables)` = the
+  two counter segments + every placed table) and may cross the central counter gap
+  onto the dining floor to serve; bounds run from `DINING_MIN_Z` (front) to the
+  back of the kitchen.
+- **Tables are arrangeable.** Dining tables live in `G.tables` (a `TableInst`
+  list of dining-row columns), seeded from `DEFAULT_TABLE_COLS`. In build mode,
+  hovering the dining floor (`inDiningZone`) snaps the cursor to a table column;
+  clicking adds / picks-up-to-move / drops a table and **X** removes one. Seating
+  (`customers.ts`), collision (`chef.ts`) and rendering (`sceneView.syncTables`)
+  all derive from `G.tables`, so the dining layout is fully data-driven.
 - **Adjacency is the heart of decoration.** `recomputeDerived()` must be called
   after any layout/pricing/reputation change. It sets each cook station's
   `effCookSpeed`/`effSlots` from neighbouring decor and fills `G.derived`

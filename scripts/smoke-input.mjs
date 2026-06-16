@@ -61,14 +61,26 @@ const fail = await withGame(async ({ page, check }) => {
   await page.waitForTimeout(200);
   await page.locator(".swatch").first().click();
   await page.waitForTimeout(150);
-  const beforeCount = await get(() => window.__G.grid.cells.filter((c) => c.item).length);
-  await page.mouse.move(620, 300);
+  // Hover a spot down in the kitchen (the upper screen is now the dining floor,
+  // where clicks arrange tables instead of placing kitchen items).
+  await page.mouse.move(640, 520);
   await page.waitForTimeout(150);
+  // Make sure the hovered kitchen cell is empty so the placement has somewhere
+  // to land (and confirm we're not over the dining floor).
+  const zone = await get(() => {
+    const G = window.__G;
+    if (!G.build.inDining) {
+      const cell = G.grid.cells[G.build.cursorRow * G.grid.cols + G.build.cursorCol];
+      if (cell) cell.item = null;
+    }
+    return G.build.inDining;
+  });
+  const beforeCount = await get(() => window.__G.grid.cells.filter((c) => c.item).length);
   await page.mouse.down();
   await page.mouse.up();
   await page.waitForTimeout(200);
   const afterCount = await get(() => window.__G.grid.cells.filter((c) => c.item).length);
-  check("mouse click in build places an item", afterCount === beforeCount + 1, `${beforeCount}→${afterCount}`);
+  check("mouse click in build places an item", afterCount === beforeCount + 1, `inDining=${zone} ${beforeCount}→${afterCount}`);
 });
 
 finish("INPUT", fail);

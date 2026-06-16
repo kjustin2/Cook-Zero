@@ -505,6 +505,7 @@ export class UI {
     const bar = el("div", { class: "build-bar" },
       el("b", {}, "🔧 Floor Plan"),
       el("span", { class: "keys" }, "Click ", el("b", {}, "place/pick"), " · ", el("b", {}, "R"), " rotate · ", el("b", {}, "X"), " sell · ", el("b", {}, "Esc"), " done"),
+      el("span", { class: "keys" }, "🍽️ Dining floor: click to ", el("b", {}, "add/move a table"), " · ", el("b", {}, "X"), " removes one"),
       btn("Done", "small", () => this.ctrl.exitBuild()));
     bar.style.pointerEvents = "auto";
 
