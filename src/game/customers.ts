@@ -6,7 +6,7 @@ import type { Customer, CustomerKind, GameState, Recipe } from "./types";
 import type { Ctx } from "./ctx";
 import { RECIPES } from "./catalog";
 import { SHIFT_LEN, SPAWN_BASE, REP_EXPIRE, CUSTOMER_KINDS } from "./balance";
-import { TABLES, TABLE_COUNT, ENTRANCE, EXIT } from "./dining";
+import { TABLES, TABLE_COUNT, ENTRANCE, EXIT, seatOf } from "./dining";
 import { nextUid } from "./state";
 import { clamp, lerp, dist } from "../core/math";
 
@@ -64,7 +64,7 @@ function ensureTutorialGuest(ctx: Ctx): void {
     uid: nextUid(), recipe: burger, kind: "normal", payMult: kd.pay, repMult: kd.rep,
     spot, x: ENTRANCE.x, z: ENTRANCE.z, state: "walkin",
     patience: 999, maxPatience: 999, anger: 0, servedT: 0, happy: false,
-    look: makeLook(rng), bob: rng.range(0, Math.PI * 2),
+    look: makeLook(rng), bob: rng.range(0, Math.PI * 2), face: 0, walk: 0,
   });
 }
 
@@ -94,6 +94,8 @@ function spawnCustomer(ctx: Ctx): void {
     happy: false,
     look: makeLook(rng),
     bob: rng.range(0, Math.PI * 2),
+    face: 0,
+    walk: 0,
   });
 }
 
@@ -112,7 +114,8 @@ function expire(ctx: Ctx, c: Customer): void {
   ctx.fx.shake(c.kind === "critic" ? 0.2 : 0.12);
 }
 
-/** Move a customer toward a target point; returns true on arrival. */
+/** Move a customer toward a target point; returns true on arrival. Faces the
+ *  heading and advances the walk gait so the rig animates a real walk. */
 function moveTo(c: Customer, tx: number, tz: number, speed: number, dt: number): boolean {
   const dx = tx - c.x;
   const dz = tz - c.z;
@@ -124,6 +127,8 @@ function moveTo(c: Customer, tx: number, tz: number, speed: number, dt: number):
   }
   c.x += (dx / d) * speed * dt;
   c.z += (dz / d) * speed * dt;
+  c.face = Math.atan2(dx, dz); // rig forward is +z, so face the travel direction
+  c.walk += dt * (5 + speed);
   return false;
 }
 
@@ -146,15 +151,18 @@ export function updateCustomers(ctx: Ctx, dt: number): void {
   for (const c of G.customers) {
     c.bob += dt;
     const table = TABLES[c.spot];
+    const seat = table ? seatOf(table) : null;
     switch (c.state) {
       case "walkin": {
-        if (table && moveTo(c, table.x, table.z, WALK_SPEED, dt)) {
+        if (seat && moveTo(c, seat.x, seat.z, WALK_SPEED, dt)) {
           c.state = "waiting";
           c.patience = c.maxPatience;
+          c.face = 0; // settle in facing the kitchen / camera
         }
         break;
       }
       case "waiting": {
+        c.face = 0; // seated, facing out toward the kitchen
         // Tutorial guests are infinitely patient — they never fume or storm off.
         if (!tutorial) {
           c.patience -= dt;
@@ -167,6 +175,7 @@ export function updateCustomers(ctx: Ctx, dt: number): void {
         break;
       }
       case "served": {
+        c.face = 0; // still in the seat, beaming at the kitchen
         c.servedT += dt;
         if (c.servedT > 0.7) c.state = "leaving";
         break;

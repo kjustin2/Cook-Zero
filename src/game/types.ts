@@ -167,7 +167,9 @@ export interface Customer {
   servedT: number; // time spent in served animation
   happy: boolean; // served (true) vs stormed off (false)
   look: CustomerLook;
-  bob: number; // animation phase
+  bob: number; // idle animation phase
+  face: number; // heading (radians) — faces the walk direction, or the camera when seated
+  walk: number; // gait phase, advanced while walking in / leaving
 }
 
 export interface CustomerLook {

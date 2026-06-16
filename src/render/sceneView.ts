@@ -57,6 +57,7 @@ interface CustView {
   bubble: THREE.Group;
   bar: THREE.Mesh;
   icon: THREE.Sprite;
+  ring?: THREE.Mesh; // special-customer floor ring (kept grounded, not parented to the rig)
   shownT: number; // bubble pop-in age
 }
 
@@ -459,25 +460,28 @@ export class SceneView {
         barBg.position.z = -0.01;
         const bubble = group(icon, bar, barBg);
         this.scene.add(bubble);
-        // Special-customer flourish: a glowing floor ring + a badge in the bubble.
+        // Special-customer flourish: a glowing floor ring (kept as its own scene
+        // object so it stays on the floor when the guest lifts onto a stool) + a
+        // badge in the bubble.
         const kindColor = c.kind === "vip" ? 0xffd24a : c.kind === "critic" ? 0x6cc6ff : 0;
+        let ring: THREE.Mesh | undefined;
         if (kindColor) {
-          const ring = new THREE.Mesh(
+          ring = new THREE.Mesh(
             new THREE.RingGeometry(0.5, 0.74, 26),
             new THREE.MeshBasicMaterial({ color: kindColor, transparent: true, opacity: 0.75, side: THREE.DoubleSide, depthWrite: false }),
           );
           ring.rotation.x = -Math.PI / 2;
-          ring.position.y = 0.05;
-          rig.group.add(ring);
+          this.scene.add(ring);
           const badge = makeEmoji(c.kind === "vip" ? "👑" : "📸", 0.62);
           badge.position.set(0.62, 0.5, 0.02);
           bubble.add(badge);
         }
-        v = { rig, bubble, bar, icon, shownT: 0 };
+        v = { rig, bubble, bar, icon, ring, shownT: 0 };
         this.custViews.set(c.uid, v);
       }
       v.rig.group.position.set(c.x, 0, c.z);
-      v.rig.update(dt, { bob: c.bob, anger: c.anger, state: c.state });
+      v.rig.update(dt, { bob: c.bob, anger: c.anger, state: c.state, walk: c.walk, face: c.face });
+      if (v.ring) v.ring.position.set(c.x, 0.05, c.z);
       // Order bubble.
       const showBubble = c.state === "waiting" || c.state === "walkin";
       v.bubble.visible = showBubble;
@@ -500,6 +504,10 @@ export class SceneView {
         this.scene.remove(v.bubble);
         disposeGeom(v.rig.group); // actors share module-level materials
         disposeTree(v.bubble);
+        if (v.ring) {
+          this.scene.remove(v.ring);
+          disposeTree(v.ring);
+        }
         this.custViews.delete(uid);
       }
     }

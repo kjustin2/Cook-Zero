@@ -271,7 +271,7 @@ export function buildChef(opts: { helper?: boolean } = {}): ChefRig {
 
 export interface CustomerRig {
   group: THREE.Group;
-  update(dt: number, a: { bob: number; anger: number; state: string }): void;
+  update(dt: number, a: { bob: number; anger: number; state: string; walk: number; face: number }): void;
 }
 
 export function buildCustomer(look: { skin: number; shirt: number; hair: number; hat: boolean }): CustomerRig {
@@ -351,6 +351,11 @@ export function buildCustomer(look: { skin: number; shirt: number; hair: number;
 
   const tmpColor = new THREE.Color();
   const browRestY = browL.position.y;
+  const armRestY = armL.position.y;
+  // Eased seat height: 0 while standing/walking, SEAT_LIFT once perched on the
+  // stool, so guests smoothly sit down / stand back up.
+  const SEAT_LIFT = 0.4;
+  let lift = 0;
 
   // Blink bookkeeping: accumulate our own clock from dt and stagger the crowd by
   // deriving a stable phase offset from this customer's look (no randomness).
@@ -373,10 +378,14 @@ export function buildCustomer(look: { skin: number; shirt: number; hair: number;
     eyeL.children[1], eyeL.children[2], eyeR.children[1], eyeR.children[2],
   ];
 
-  function update(dt: number, a: { bob: number; anger: number; state: string }): void {
-    // Served customers get a bigger, happier hop; otherwise a gentle idle bob.
+  function update(dt: number, a: { bob: number; anger: number; state: string; walk: number; face: number }): void {
     const served = a.state === "served";
+    const walking = a.state === "walkin" || a.state === "leaving";
+    const seated = !walking; // waiting / served → perched on the stool
     idleT += dt;
+
+    // Face the heading while walking; face the camera (0) once seated/served.
+    body.rotation.y = a.face;
 
     // Eyes: happy squinted "^^" curves when served, otherwise normal but with a
     // periodic blink. Both effects are just a vertical squash of the eye groups.
@@ -387,33 +396,52 @@ export function buildCustomer(look: { skin: number; shirt: number; hair: number;
     // Drop the glossy catch-lights while squinting so it reads as a closed smile.
     for (const g of eyeGlints) g.visible = !served;
 
-    // How much "calm idle life" to apply: full while quietly waiting, but it
-    // yields to the served happy-hop and fades out as anger rises (a cross
-    // customer shouldn't be casually glancing about). 0..1.
-    const calm = served ? 0 : Math.max(0, 1 - Math.max(0, Math.min(1, a.anger)));
+    // Smoothly sit down on arrival / stand back up to leave.
+    lift += ((seated ? SEAT_LIFT : 0) - lift) * Math.min(1, dt * 6);
 
-    // Occasional tiny idle hop, staggered per-rig, layered onto the base bob so
-    // the queue subtly bounces out of sync. A short sine pop once per IDLE_HOP.
-    const hopLocal = ((idleT + hopPhase) % IDLE_HOP + IDLE_HOP) % IDLE_HOP;
-    const hop = hopLocal < 0.45 ? Math.sin((hopLocal / 0.45) * Math.PI) * 0.04 * calm : 0;
-    const amp = served ? 0.11 : 0.028;
-    body.position.y = Math.abs(Math.sin(a.bob)) * amp + hop;
-    // Tiny side-to-side sway so they never look frozen, plus a slower idle
-    // weight-shift lean (staggered by idlePhase) for extra calm-standing life.
-    body.rotation.z = Math.sin(a.bob * 0.5) * 0.03 + Math.sin(idleT * 1.1 + idlePhase) * 0.022 * calm;
+    if (walking) {
+      // WALK: legs stride forward/back, stubby arms counter-swing, a little
+      // spring in the step. Idle lean/head-turn reset.
+      const swing = Math.sin(a.walk);
+      legL.rotation.x = swing * 0.6;
+      legR.rotation.x = -swing * 0.6;
+      armL.position.set(-0.3, armRestY - swing * 0.05, -swing * 0.07);
+      armR.position.set(0.3, armRestY + swing * 0.05, swing * 0.07);
+      body.position.y = lift + Math.abs(swing) * 0.05;
+      body.rotation.z = 0;
+      head.rotation.y = headRestY;
+      const stretch = swing * 0.05;
+      torso.scale.y = 1.0 * (1 + stretch);
+      torso.scale.x = 0.92 * (1 - stretch * 0.6);
+      torso.scale.z = 0.8 * (1 - stretch * 0.6);
+    } else {
+      // SEATED (waiting/served): perched on the stool with legs tucked forward,
+      // plus calm idle life (gentle bob, sway, glances) or a happy hop on serve.
+      const calm = served ? 0 : Math.max(0, 1 - Math.max(0, Math.min(1, a.anger)));
+      legL.rotation.x = 0.55;
+      legR.rotation.x = 0.55;
+      armL.position.set(-0.3, armRestY, 0);
+      armR.position.set(0.3, armRestY, 0);
 
-    // Occasional "look around": slowly turn the head left/right every few
-    // seconds, staggered per-rig. The cubed sine keeps the head mostly forward
-    // and only sweeps to a side now and then. Suppressed when served/angry.
-    const lookLocal = ((idleT + lookPhase) % IDLE_LOOK + IDLE_LOOK) % IDLE_LOOK;
-    const lookWave = Math.sin((lookLocal / IDLE_LOOK) * Math.PI * 2 + idlePhase);
-    head.rotation.y = headRestY + (lookWave * lookWave * lookWave) * 0.28 * calm;
+      // Occasional tiny idle hop, staggered per-rig, layered onto the base bob.
+      const hopLocal = ((idleT + hopPhase) % IDLE_HOP + IDLE_HOP) % IDLE_HOP;
+      const hop = hopLocal < 0.45 ? Math.sin((hopLocal / 0.45) * Math.PI) * 0.04 * calm : 0;
+      const amp = served ? 0.11 : 0.028;
+      body.position.y = lift + Math.abs(Math.sin(a.bob)) * amp + hop;
+      // Tiny side-to-side sway + slow idle weight-shift lean.
+      body.rotation.z = Math.sin(a.bob * 0.5) * 0.03 + Math.sin(idleT * 1.1 + idlePhase) * 0.022 * calm;
 
-    // Bouncy squash-and-stretch synced to the bob; livelier on the happy hop.
-    const stretch = Math.sin(a.bob) * (served ? 0.12 : 0.05);
-    torso.scale.y = 1.0 * (1 + stretch);
-    torso.scale.x = 0.92 * (1 - stretch * 0.6);
-    torso.scale.z = 0.8 * (1 - stretch * 0.6);
+      // Occasional "look around": slowly turn the head left/right, staggered.
+      const lookLocal = ((idleT + lookPhase) % IDLE_LOOK + IDLE_LOOK) % IDLE_LOOK;
+      const lookWave = Math.sin((lookLocal / IDLE_LOOK) * Math.PI * 2 + idlePhase);
+      head.rotation.y = headRestY + (lookWave * lookWave * lookWave) * 0.28 * calm;
+
+      // Bouncy squash-and-stretch synced to the bob; livelier on the happy hop.
+      const stretch = Math.sin(a.bob) * (served ? 0.12 : 0.05);
+      torso.scale.y = 1.0 * (1 + stretch);
+      torso.scale.x = 0.92 * (1 - stretch * 0.6);
+      torso.scale.z = 0.8 * (1 - stretch * 0.6);
+    }
 
     // Anger: lerp shirt + skin toward red, flush a little emissive, AND give a
     // cute pouty look — brows tilt down toward the nose, mouth flips to a frown,

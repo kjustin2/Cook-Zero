@@ -22,8 +22,8 @@ export interface Table {
   z: number;
 }
 
-/** Tables guests sit at (z is the seat the guest occupies; chef serves from the
- *  kitchen-facing side, ~1.2 away). */
+/** Dining tables (z is the table centre). Guests sit on the back stool, facing
+ *  the kitchen; the chef serves from the kitchen-facing side, reaching across. */
 export const TABLES: Table[] = [
   { x: -8.2, z: -4.4 },
   { x: -4.1, z: -4.4 },
@@ -32,11 +32,17 @@ export const TABLES: Table[] = [
   { x: 8.2, z: -4.4 },
 ];
 
+/** Stool offset behind the table centre — where the guest actually sits (so
+ *  they sit AT the table facing the camera, not on top of it). */
+export const SEAT_DZ = -0.98;
+export const seatOf = (t: Table): { x: number; z: number } => ({ x: t.x, z: t.z + SEAT_DZ });
+
 export const ENTRANCE = { x: -HALF_W - 1.6, z: -6.6 };
 export const EXIT = { x: HALF_W + 1.6, z: -6.6 };
 
-/** How close the chef must be to a seated guest (or table) to serve. */
-export const SERVE_REACH = 2.0;
+/** How close the chef must be to a seated guest to serve (reaches across the
+ *  table from the kitchen side). */
+export const SERVE_REACH = 2.4;
 
 const TABLE_HALF = 0.78;
 const COUNTER_HALF_D = 0.55;
