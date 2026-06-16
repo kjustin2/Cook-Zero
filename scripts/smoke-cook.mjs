@@ -73,6 +73,38 @@ const fail = await withGame(async ({ page, check }) => {
   check("assembled bun+patty plate", r.hasPlate);
   check("served the burger", r.served === 1, `label="${r.serveLabel}"`);
   check("earned coins on serve", r.coins > 0, `+$${r.coins}`);
+
+  // ── Plate hold: set a carried plate down on a counter, leave, come back, add
+  //    another part, then pick it back up. ──
+  const hold = await page.evaluate(() => {
+    const SR = window.__SR, G = window.__G;
+    const log = {};
+    const goTo = (col, row) => { const w = SR.cellWorld(col, row); G.chef.x = w.x; G.chef.z = w.z; };
+    const prep = SR.find("prep");
+    // The counter is empty after the main flow picked its plate up; carry a
+    // one-patty plate over to it.
+    G.carry = { kind: "plate", parts: [{ id: "patty", quality: "good" }] };
+    goTo(prep.col, prep.row);
+    log.setLabel = SR.interact(); // "Set down plate"
+    const held = SR.itemAt(prep.col, prep.row);
+    log.setDown = G.carry === null && !!held?.plate && held.plate.length === 1;
+
+    // Walk off, grab a bun, return, and add it to the held plate.
+    const binB = SR.find("bin_bun");
+    goTo(binB.col, binB.row); SR.interact();
+    goTo(prep.col, prep.row);
+    log.addLabel = SR.interact(); // "Add to plate"
+    const held2 = SR.itemAt(prep.col, prep.row);
+    log.added = !!held2?.plate && held2.plate.length === 2;
+
+    // Pick the finished plate back up.
+    log.pickLabel = SR.interact(); // "Pick up plate (2)"
+    log.pickedUp = !!(G.carry && G.carry.kind === "plate" && G.carry.parts.length === 2);
+    return log;
+  });
+  check("set a carried plate down on a counter", hold.setDown, `label="${hold.setLabel}"`);
+  check("added a part to the held plate", hold.added, `label="${hold.addLabel}"`);
+  check("picked the held plate back up", hold.pickedUp, `label="${hold.pickLabel}"`);
 });
 
 finish("COOK", fail);

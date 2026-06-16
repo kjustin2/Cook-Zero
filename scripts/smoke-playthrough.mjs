@@ -24,9 +24,12 @@ const fail = await withGame(async ({ page, check }) => {
     await page.evaluate((p) => {
       const G = window.__G;
       G.dayCoins = p ? G.quota + 5 : 0;
-      G.dayTime = 0.05;
+      // Force-end directly (the tutorial can freeze the clock, so don't rely on
+      // the rAF loop ticking it down).
+      G.tutorial = -1;
+      G.dayTime = 0;
     }, pass);
-    await page.waitForTimeout(240); // let the rAF loop run the clock out
+    await page.waitForTimeout(240); // let the rAF loop pick up the shift end
   };
   const exerciseBuild = async () => {
     await clickText(/Floor Plan/);

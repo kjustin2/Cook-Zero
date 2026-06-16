@@ -27,7 +27,7 @@ export const TUTORIAL: TutStep[] = [
   { text: "Let it sizzle… when it turns golden ✨, press SPACE to grab it back.", done: (s) => s.carry?.kind === "part" && s.carry.id === "patty" },
   { text: "Build the burger! 🔪 At the Prep Counter press SPACE to add the patty.", done: (s) => prepHas(s, "patty") || carriedBurger(s) },
   { text: "Grab a bun 🥯, bring it to the Prep Counter, and add it too.", done: (s) => (prepHas(s, "bun") && prepHas(s, "patty")) || carriedBurger(s) },
-  { text: "Pick up the plate 🍔, then serve a customer at the counter with SPACE!", done: (s) => s.stats.served >= 1 },
+  { text: "Pick up the plate 🍔, then walk it out to the guest at their table and press SPACE to serve!", done: (s) => s.stats.served >= 1 },
 ];
 
 /** Advance the tutorial when the current step's goal is met. */

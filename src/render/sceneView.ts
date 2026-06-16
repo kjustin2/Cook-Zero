@@ -565,8 +565,10 @@ export class SceneView {
       const v = this.itemViews.get(it.uid);
       if (!v?.light) continue;
       const cooking = it.slots?.some((s) => s.filling !== null) ?? false;
-      const flick = 0.85 + Math.sin(this.time * 17 + it.uid) * 0.15;
-      v.light.intensity = damp(v.light.intensity, (cooking ? 0.7 : 0.18) * flick, 8, dt);
+      const flick = 0.9 + Math.sin(this.time * 17 + it.uid) * 0.1;
+      // Ease gently between idle and cooking glow so dropping food on never
+      // pops a bright flash — just a soft warm-up.
+      v.light.intensity = damp(v.light.intensity, (cooking ? 0.5 : 0.18) * flick, 4, dt);
     }
     if (this.neonMat) {
       const pop = Math.sin(this.time * 23) > 0.96 ? 0.7 : 0;

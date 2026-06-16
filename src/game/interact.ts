@@ -194,6 +194,19 @@ export function actionFor(ctx: Ctx): Action | null {
     } else if (d.kind === "prep") {
       if (!item.plate) item.plate = [];
       const pl = item.plate;
+      // Set a carried plate down on an empty counter to hold it — leave it here,
+      // go grab another ingredient, and come back to add to it / pick it up.
+      if (G.carry && G.carry.kind === "plate" && pl.length === 0) {
+        const held = G.carry.parts;
+        consider(dd, () => ({
+          label: "Set down plate",
+          run: () => {
+            item.plate = held.slice();
+            G.carry = null;
+            ctx.sfx.place();
+          },
+        }));
+      }
       // Add a prepped/cooked part to the plate on this counter.
       let addable: PlatePart | null = null;
       if (G.carry) {

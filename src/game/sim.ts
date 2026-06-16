@@ -37,6 +37,7 @@ export function updatePlaying(ctx: Ctx, dt: number): void {
     if (G.toast.t > 2.6) G.toast = null;
   }
 
-  // Shift clock.
-  G.dayTime = Math.max(0, G.dayTime - dt);
+  // Shift clock. The first-run tutorial is a controlled setting — the night
+  // does NOT tick down while it's running, so the player can learn unhurried.
+  if (G.tutorial < 0) G.dayTime = Math.max(0, G.dayTime - dt);
 }

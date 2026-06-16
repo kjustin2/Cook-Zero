@@ -7,6 +7,7 @@ const fail = await withGame(async ({ page, check }) => {
   const tut = await page.evaluate(() => {
     const SR = window.__SR, G = window.__G;
     SR.quickStart();
+    G.tutorial = 0; // quickStart clears the tutorial gate; re-arm it for this check
     const log = { start: G.tutorial };
     const go = (c, r) => { const w = SR.cellWorld(c, r); G.chef.x = w.x; G.chef.z = w.z; };
     const binP = SR.find("bin_patty"), grill = SR.find("grill"), prep = SR.find("prep"), binB = SR.find("bin_bun");

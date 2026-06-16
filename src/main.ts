@@ -282,6 +282,8 @@ const api: TestApi = {
     while (G.phase === "cutscene" && guard++ < 50) skipCutscene(G);
   },
   // Start a fresh run and fast-forward through intro + setup into actual play.
+  // Tests want the normal (non-tutorial) game, so clear the tutorial gate — the
+  // controlled tutorial freezes the clock/spawning and is covered separately.
   quickStart: () => {
     controller.play();
     let g = 0;
@@ -290,6 +292,7 @@ const api: TestApi = {
       else if (G.phase === "manage") controller.startNextShift();
       else break;
     }
+    G.tutorial = -1;
   },
   advanceCutscene: () => advanceCutscene(G),
   info: () => ({

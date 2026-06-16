@@ -47,6 +47,27 @@ function rollKind(ctx: Ctx): CustomerKind {
   return "normal";
 }
 
+function makeLook(rng: Ctx["rng"]): { skin: number; shirt: number; hair: number; hat: boolean } {
+  return { skin: rng.int(0, 5), shirt: rng.int(0, 7), hair: rng.int(0, 6), hat: rng.chance(0.25) };
+}
+
+/** Controlled tutorial: keep exactly one patient burger guest seated so the
+ *  player can practice the full cook→serve loop without crowd pressure. */
+function ensureTutorialGuest(ctx: Ctx): void {
+  const { G, rng } = ctx;
+  if (G.customers.some((c) => c.state !== "leaving")) return;
+  const spot = freeTable(G);
+  if (spot < 0) return;
+  const burger = RECIPES.find((r) => r.id === "burger") ?? RECIPES[0];
+  const kd = CUSTOMER_KINDS.normal;
+  G.customers.push({
+    uid: nextUid(), recipe: burger, kind: "normal", payMult: kd.pay, repMult: kd.rep,
+    spot, x: ENTRANCE.x, z: ENTRANCE.z, state: "walkin",
+    patience: 999, maxPatience: 999, anger: 0, servedT: 0, happy: false,
+    look: makeLook(rng), bob: rng.range(0, Math.PI * 2),
+  });
+}
+
 function spawnCustomer(ctx: Ctx): void {
   const { G, rng } = ctx;
   const spot = freeTable(G);
@@ -71,12 +92,7 @@ function spawnCustomer(ctx: Ctx): void {
     anger: 0,
     servedT: 0,
     happy: false,
-    look: {
-      skin: rng.int(0, 5),
-      shirt: rng.int(0, 7),
-      hair: rng.int(0, 6),
-      hat: rng.chance(0.25),
-    },
+    look: makeLook(rng),
     bob: rng.range(0, Math.PI * 2),
   });
 }
@@ -113,12 +129,18 @@ function moveTo(c: Customer, tx: number, tz: number, speed: number, dt: number):
 
 export function updateCustomers(ctx: Ctx, dt: number): void {
   const { G } = ctx;
+  const tutorial = G.tutorial >= 0;
 
-  // Spawn pacing.
-  G.spawnTimer -= dt;
-  if (G.spawnTimer <= 0) {
-    spawnCustomer(ctx);
-    G.spawnTimer = spawnInterval(G);
+  // Spawn pacing — suppressed during the controlled tutorial, which instead
+  // keeps a single patient guest waiting.
+  if (tutorial) {
+    ensureTutorialGuest(ctx);
+  } else {
+    G.spawnTimer -= dt;
+    if (G.spawnTimer <= 0) {
+      spawnCustomer(ctx);
+      G.spawnTimer = spawnInterval(G);
+    }
   }
 
   for (const c of G.customers) {
@@ -133,12 +155,15 @@ export function updateCustomers(ctx: Ctx, dt: number): void {
         break;
       }
       case "waiting": {
-        c.patience -= dt;
-        c.anger = clamp(1 - c.patience / (c.maxPatience * 0.45), 0, 1);
-        if (c.anger > 0.55 && ctx.rng.chance(dt * 0.5)) {
-          ctx.fx.float("💢", c.x + 0.5, c.z + 1.0, { color: "#ff7a7a" });
+        // Tutorial guests are infinitely patient — they never fume or storm off.
+        if (!tutorial) {
+          c.patience -= dt;
+          c.anger = clamp(1 - c.patience / (c.maxPatience * 0.45), 0, 1);
+          if (c.anger > 0.55 && ctx.rng.chance(dt * 0.5)) {
+            ctx.fx.float("💢", c.x + 0.5, c.z + 1.0, { color: "#ff7a7a" });
+          }
+          if (c.patience <= 0) expire(ctx, c);
         }
-        if (c.patience <= 0) expire(ctx, c);
         break;
       }
       case "served": {

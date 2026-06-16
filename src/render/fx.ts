@@ -240,7 +240,7 @@ export class FxSystem implements Fx {
     r.t = 0;
     r.life = 0.5;
     r.r0 = 0.4;
-    r.r1 = 2.6;
+    r.r1 = 1.7; // smaller, gentler — no big bright burst
     r.mesh.visible = true;
     r.mesh.position.set(x, 0.06, z);
     (r.mesh.material as THREE.MeshBasicMaterial).color = new THREE.Color(color);
@@ -303,7 +303,8 @@ export class FxSystem implements Fx {
       if (f >= 1) { r.active = false; r.mesh.visible = false; continue; }
       const rad = r.r0 + (r.r1 - r.r0) * f;
       r.mesh.scale.set(rad * 2, rad * 2, 1);
-      (r.mesh.material as THREE.MeshBasicMaterial).opacity = 1 - f;
+      // Keep rings faint so the additive blend never reads as a flash of light.
+      (r.mesh.material as THREE.MeshBasicMaterial).opacity = (1 - f) * 0.34;
     }
 
     for (const c of this.coinPool) {
