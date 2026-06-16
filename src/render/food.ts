@@ -128,6 +128,71 @@ function buildPatty(quality: FoodQuality): THREE.Group {
   return group(...parts);
 }
 
+/**
+ * A patty that shows its LIVE cooking state on the grill. The body is one shared
+ * material that browns as it sears; the sear marks fade in; a glossy sheen blob
+ * blooms in the perfect window. The caller drives it each frame via the tintable
+ * materials tagged on `group.userData.cook` (see sceneView.tintCookingPatty).
+ */
+export function buildCookingPatty(): THREE.Group {
+  const h = 0.14;
+  const bodyMat = stdMat(0xe0697b, { rough: 0.42, metal: 0.05, emissive: 0xff7a2a, emissiveIntensity: 0 });
+  const disc = at(cyl(R * 0.9, R * 0.98, h, bodyMat, 24), 0, h / 2, 0);
+  const dome = at(squash(sphere(R * 0.92, bodyMat, 18), 0.3), 0, h, 0);
+
+  // Sear marks fade in as the crust forms.
+  const searMat = stdMat(0x2a1408, { rough: 0.7, transparent: true, opacity: 0 });
+  const marks: THREE.Object3D[] = [];
+  for (const dz of [0, R * 0.34, -R * 0.34]) {
+    const m = at(box(R * 1.5, 0.03, R * 0.12, searMat), 0, h + 0.045, dz);
+    m.rotation.y = Math.PI / 7;
+    marks.push(m);
+  }
+
+  // A juicy sheen highlight that brightens through the perfect window.
+  const sheenMat = stdMat(0xffe2bc, { rough: 0.12, metal: 0.1, emissive: 0xffd9a0, emissiveIntensity: 0, transparent: true, opacity: 0 });
+  const sheen = at(squash(sphere(R * 0.26, sheenMat, 10), 0.3), -R * 0.18, h + 0.1, -R * 0.14);
+
+  const g = group(disc, dome, ...marks, sheen);
+  g.userData.cook = { body: bodyMat, sear: searMat, sheen: sheenMat };
+  return g;
+}
+
+/** Fries that brighten from pale to golden as they fry (live, like the patty). */
+export function buildCookingFries(): THREE.Group {
+  const cartonMat = stdMat(0xf24a4a, { rough: 0.32, metal: 0.03 });
+  const rimMat = stdMat(0xfdf6ec, { rough: 0.4 });
+  const cartonH = 0.26;
+  const carton = at(cyl(R * 0.52, R * 0.34, cartonH, cartonMat, 16), 0, cartonH / 2, 0);
+  const rim = at(cyl(R * 0.56, R * 0.55, cartonH * 0.24, rimMat, 16), 0, cartonH * 0.9, 0);
+
+  // One shared fry material that the caller tints from pale → golden → deep.
+  const fryMat = stdMat(0xe8d9a0, { rough: 0.36, metal: 0.03, emissive: 0xffa522, emissiveIntensity: 0 });
+  const parts: THREE.Object3D[] = [carton, rim];
+  const fryH = 0.4;
+  const cols = [-0.2, -0.06, 0.08, 0.2];
+  const rows = [-0.1, 0.12];
+  let i = 0;
+  for (const cx of cols) {
+    for (const cz of rows) {
+      if (i >= 7) break;
+      const fry = box(0.062, fryH, 0.062, fryMat);
+      at(fry, cx * TILE * 0.24, cartonH + fryH / 2 - 0.06, cz * TILE * 0.24);
+      fry.rotation.z = cx * 0.6;
+      fry.rotation.x = cz * 0.7;
+      parts.push(fry);
+      i++;
+    }
+  }
+  const sheenMat = stdMat(0xfff4d0, { rough: 0.12, emissive: 0xffe9b0, emissiveIntensity: 0, transparent: true, opacity: 0 });
+  const sheen = at(box(0.16, 0.05, 0.05, sheenMat), R * 0.3, cartonH + fryH * 0.7, R * 0.2);
+  parts.push(sheen);
+
+  const g = group(...parts);
+  g.userData.cook = { fries: fryMat, sheen: sheenMat };
+  return g;
+}
+
 function buildBurnt(): THREE.Group {
   const h = 0.16;
   // A sad little charred matte lump — dead-matte charcoal so it never catches a

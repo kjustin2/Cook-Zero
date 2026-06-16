@@ -157,19 +157,49 @@ function buildGrill(): THREE.Group {
 
   const topY = legH + bodyH;
 
-  // Bright stainless bezel framing the dark cooktop.
+  // Bright stainless bezel framing the cooktop.
   const bezel = box(FOOT, 0.05, FOOT, stdMat(0xc2c7cd, STEEL_BRIGHT));
   bezel.position.y = topY + 0.025;
-  const cooktop = box(FOOT * 0.88, 0.05, FOOT * 0.9, stdMat(0x26292d, { metal: 0.4, rough: 0.5 }));
-  cooktop.position.y = topY + 0.045;
 
-  const barMat = stdMat(0x1d1f22, { emissive: 0xff5a1e, emissiveIntensity: 0.9, rough: 0.6 });
-  const bars: THREE.Mesh[] = [];
-  for (let i = 0; i < 4; i++) {
-    const bar = box(FOOT * 0.82, 0.05, 0.12, barMat);
-    bar.position.set(0, topY + 0.08, -0.45 + i * 0.3);
-    bars.push(bar);
+  // Recessed firebox with a bed of softly-glowing embers down inside it (kept
+  // dim so it reads as a warm glow under the grate, never a bloom flare).
+  const firebox = box(FOOT * 0.86, 0.09, FOOT * 0.78, stdMat(0x141517, { metal: 0.35, rough: 0.65 }));
+  firebox.position.set(0, topY + 0.045, -0.02);
+  const embers = box(FOOT * 0.8, 0.02, FOOT * 0.72, stdMat(0x381206, { emissive: 0xc2330e, emissiveIntensity: 0.16, rough: 0.8 }));
+  embers.position.set(0, topY + 0.08, -0.02);
+
+  // Cast-iron grate over the embers: long ribs + a few cross ribs (the glow
+  // peeks between them).
+  const grateMat = stdMat(0x1b1d20, { metal: 0.35, rough: 0.55 });
+  const grates: THREE.Mesh[] = [];
+  for (let i = 0; i < 5; i++) {
+    const rib = box(FOOT * 0.82, 0.04, 0.06, grateMat);
+    rib.position.set(0, topY + 0.12, -0.5 + i * 0.25);
+    grates.push(rib);
   }
+  for (let i = 0; i < 3; i++) {
+    const cross = box(0.06, 0.035, FOOT * 0.74, grateMat);
+    cross.position.set(-0.5 + i * 0.5, topY + 0.11, -0.02);
+    grates.push(cross);
+  }
+
+  // Grease trough running along the front lip.
+  const trough = box(FOOT * 0.86, 0.06, 0.1, stdMat(0x3a3d42, { metal: 0.55, rough: 0.4 }));
+  trough.position.set(0, topY + 0.05, FOOT / 2 - 0.07);
+
+  // Brushed (matte-ish) backsplash riser with a utensil rail + hanging tongs.
+  // Deliberately NOT mirror-bright so the grill's warm point light can't kick a
+  // blooming specular off this big flat panel.
+  const riser = box(FOOT * 0.96, 0.5, 0.06, stdMat(0x7d828a, { metal: 0.35, rough: 0.55 }));
+  riser.position.set(0, topY + 0.28, -FOOT / 2 + 0.04);
+  const rail = cyl(0.02, 0.02, FOOT * 0.72, stdMat(0x9aa0a8, { metal: 0.85, rough: 0.25 }), 8);
+  rail.rotation.z = Math.PI / 2;
+  rail.position.set(0, topY + 0.16, -FOOT / 2 + 0.13);
+  const tongMat = stdMat(0xc6ccd2, { metal: 0.9, rough: 0.22 });
+  const tongA = box(0.03, 0.36, 0.025, tongMat);
+  tongA.position.set(-0.42, topY - 0.02, -FOOT / 2 + 0.15);
+  const tongB = box(0.03, 0.36, 0.025, tongMat);
+  tongB.position.set(-0.36, topY - 0.02, -FOOT / 2 + 0.15);
 
   // Control panel strip on the front with two knobs.
   const panel = box(FOOT * 0.94, 0.22, 0.05, stdMat(0x34383e, STEEL));
@@ -179,21 +209,26 @@ function buildGrill(): THREE.Group {
 
   const trim = trimBand(legH + bodyH * 0.82);
 
-  // A spatula resting on the cooktop edge + a little grease cup beside it.
-  const steelUten = stdMat(0xc6ccd2, { metal: 0.9, rough: 0.22 });
-  const spatHead = box(0.24, 0.02, 0.22, steelUten);
-  spatHead.position.set(0.28, topY + 0.08, 0.28);
+  // A spatula resting on the front lip + a little grease cup beside it.
+  const spatHead = box(0.24, 0.02, 0.22, tongMat);
+  spatHead.position.set(0.34, topY + 0.16, 0.4);
   const spatHandle = box(0.045, 0.03, 0.34, stdMat(0x2a2d33, { rough: 0.5 }));
-  spatHandle.position.set(0.28, topY + 0.09, 0.55);
+  spatHandle.position.set(0.34, topY + 0.17, 0.66);
   const greaseCup = cyl(0.1, 0.08, 0.12, stdMat(0x8a8f98, { metal: 0.7, rough: 0.35 }), 12);
-  greaseCup.position.set(-0.48, topY + 0.12, 0.4);
+  greaseCup.position.set(-0.52, topY + 0.12, 0.42);
 
   const g = group(
     ...legs(legH),
     cabinet,
     bezel,
-    cooktop,
-    ...bars,
+    firebox,
+    embers,
+    ...grates,
+    trough,
+    riser,
+    rail,
+    tongA,
+    tongB,
     panel,
     k1,
     k2,
@@ -203,7 +238,7 @@ function buildGrill(): THREE.Group {
     greaseCup,
     ...rivets(legH + bodyH * 0.18, FOOT / 2 + 0.01, 4),
   );
-  const slotY = topY + 0.1;
+  const slotY = topY + 0.15;
   setSlots(g, [new THREE.Vector3(-0.45, slotY, 0), new THREE.Vector3(0.45, slotY, 0)]);
   return g;
 }

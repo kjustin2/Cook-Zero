@@ -67,10 +67,10 @@ export function updateStations(ctx: Ctx, dt: number): void {
       }
       // While actively cooking, occasional sizzle.
       if (slot.t < slot.perfT && ctx.rng.chance(dt * 2)) ctx.fx.sizzle(x, z - 0.1);
-      // Hot & ready in the perfect window → sparkle + steam.
+      // Hot & ready in the perfect window → a little sparkle + wisp of steam.
       if (slot.done && slot.t < slot.perfT) {
-        if (ctx.rng.chance(dt * 2.5)) ctx.fx.sparkle(x, z - 0.1);
-        if (ctx.rng.chance(dt * 1.6)) ctx.fx.steam(x, z - 0.1);
+        if (ctx.rng.chance(dt * 1.8)) ctx.fx.sparkle(x, z - 0.1);
+        if (ctx.rng.chance(dt * 1.0)) ctx.fx.steam(x, z - 0.1);
       }
       // Overdone / burning → smoke.
       if (slot.burnT !== Infinity && slot.t >= slot.perfT && ctx.rng.chance(dt * 2.2)) {

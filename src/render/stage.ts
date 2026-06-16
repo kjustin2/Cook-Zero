@@ -104,11 +104,13 @@ export class Stage {
     this.composer = new EffectComposer(this.renderer, { frameBufferType: THREE.HalfFloatType });
     this.composer.addPass(new RenderPass(this.scene, this.camera));
     const bloom = new BloomEffect({
-      intensity: 0.55,
-      luminanceThreshold: 0.9,
-      luminanceSmoothing: 0.26,
+      // Warm ambiance bloom on emissives (neon, lamps, embers); a slightly raised
+      // threshold keeps bright-white surfaces from flaring as hard.
+      intensity: 0.46,
+      luminanceThreshold: 0.92,
+      luminanceSmoothing: 0.28,
       mipmapBlur: this.quality === "high",
-      radius: 0.58,
+      radius: 0.54,
     });
     const vignette = new VignetteEffect({ darkness: 0.26, offset: 0.42 });
     const effects = this.quality === "high"

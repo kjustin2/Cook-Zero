@@ -4,7 +4,7 @@
 // order bubbles, floating text, and the build-mode cursor/ghost.
 
 import * as THREE from "three";
-import type { GameState, Carry, IngredientId, PlacedItem, PlatePart } from "../game/types";
+import type { GameState, Carry, CookSlot, IngredientId, PlacedItem, PlatePart } from "../game/types";
 import type { Input } from "../core/input";
 import { def, RECIPES } from "../game/catalog";
 import { items, worldOfCell, cellOfWorld, TILE, COUNTER_Z, CUSTOMER_Z } from "../game/grid";
@@ -13,7 +13,7 @@ import { pullQuality } from "../game/cooking";
 import { Stage } from "./stage";
 import { buildStation } from "./stations";
 import { buildDecor } from "./decor";
-import { buildFood, buildPlate, type FoodKind, type FoodQuality } from "./food";
+import { buildFood, buildPlate, buildCookingPatty, buildCookingFries, type FoodKind } from "./food";
 import { buildChef, buildCustomer, type ChefRig, type CustomerRig } from "./actors";
 import { stdMat, box, cyl, sphere, group, canvasTex, disposeTree } from "./kit";
 import { clamp, damp, easeOutBack } from "../core/math";
@@ -73,6 +73,7 @@ interface SlotEntry {
   phase: number;
   motion: SlotMotion;
   bornTime: number; // this.time when (re)built — drives the placement pop
+  cook?: "patty" | "fries"; // live-cooking item: tint its materials each frame
 }
 interface CustView {
   rig: CustomerRig;
@@ -294,7 +295,9 @@ export class SceneView {
         // Grills/fryers glow — a warm point light that brightens while cooking.
         if (d?.kind === "grill" || d?.kind === "fryer") {
           const light = new THREE.PointLight(d.kind === "grill" ? 0xff6a2a : 0xffb066, 0.3, 3.6, 2);
-          light.position.set(0, 1.2, 0);
+          // Sit the light well ABOVE the cooktop — close to the emissive embers it
+          // would over-light them into a blooming flare when the food flips clear.
+          light.position.set(0, 1.95, 0);
           g.add(light);
           v.light = light;
         }
@@ -389,13 +392,6 @@ export class SceneView {
     g.position.y += yLift;
   }
 
-  /** Choose the slot animation for a freshly-built food kind. */
-  private motionFor(kind: FoodKind): SlotMotion {
-    if (kind === "patty" || kind === "patty_raw") return "flip";
-    if (kind === "fries") return "shake";
-    return "bob";
-  }
-
   private syncSlotFood(its: PlacedItem[]): void {
     const live = new Set<string>();
     for (const it of its) {
@@ -407,21 +403,23 @@ export class SceneView {
         const slot = it.slots[i];
         if (slot.filling === null) continue;
         const key = `${it.uid}:${i}`;
-        const { kind, quality } = slotFoodKind(d.kind, slot);
-        const sig = `${kind}:${quality}`;
+        const spec = slotMeshSpec(d.kind, slot);
         live.add(key);
         let entry = this.slotFood.get(key);
-        if (!entry || entry.sig !== sig) {
+        if (!entry || entry.sig !== spec.sig) {
           if (entry) {
             this.scene.remove(entry.group);
             disposeTree(entry.group);
           }
-          const g = buildFood(kind, quality);
+          const g = spec.build();
           this.scene.add(g);
-          entry = { group: g, sig, phase: it.uid * 0.9 + i, motion: this.motionFor(kind), bornTime: this.time };
+          entry = { group: g, sig: spec.sig, phase: it.uid * 0.9 + i, motion: spec.motion, bornTime: this.time, cook: spec.cook };
           this.slotFood.set(key, entry);
         }
         this.placeAtSlot(entry, view, slots[i]);
+        // Live-cooking items brown/sear continuously as they cook.
+        if (entry.cook === "patty") tintCookingPatty(entry.group, slot);
+        else if (entry.cook === "fries") tintCookingFries(entry.group, slot);
       }
       // Prep plate.
       if (d.kind === "prep" && it.plate && it.plate.length > 0) {
@@ -600,7 +598,7 @@ export class SceneView {
       const flick = 0.9 + Math.sin(this.time * 17 + it.uid) * 0.1;
       // Ease gently between idle and cooking glow so dropping food on never
       // pops a bright flash — just a soft warm-up.
-      v.light.intensity = damp(v.light.intensity, (cooking ? 0.5 : 0.18) * flick, 4, dt);
+      v.light.intensity = damp(v.light.intensity, (cooking ? 0.3 : 0.16) * flick, 4, dt);
     }
     if (this.neonMat) {
       const pop = Math.sin(this.time * 23) > 0.96 ? 0.7 : 0;
@@ -700,15 +698,69 @@ export class SceneView {
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-function slotFoodKind(kind: string, slot: { filling: IngredientId | null; t: number; cookT: number; perfT: number; burnT: number; done: boolean }): { kind: FoodKind; quality: FoodQuality } {
-  const q = pullQuality(slot);
+interface SlotMeshSpec {
+  sig: string;
+  build: () => THREE.Group;
+  motion: SlotMotion;
+  cook?: "patty" | "fries";
+}
+
+/** Which mesh a cooking slot shows. Grills/fryers use a single persistent
+ *  "cooking" mesh (stable sig) that the renderer tints each frame, so food sears
+ *  smoothly instead of snapping between discrete quality meshes. */
+function slotMeshSpec(kind: string, slot: CookSlot): SlotMeshSpec {
   if (kind === "grill") {
-    if (q === "burnt") return { kind: "burnt", quality: "good" };
-    if (q === "raw") return { kind: "patty_raw", quality: "good" };
-    return { kind: "patty", quality: q === "perfect" ? "perfect" : "good" };
+    if (pullQuality(slot) === "burnt") return { sig: "burnt", build: () => buildFood("burnt"), motion: "bob" };
+    return { sig: "patty_cook", build: buildCookingPatty, motion: "flip", cook: "patty" };
   }
-  if (kind === "fryer") return { kind: "fries", quality: q === "perfect" ? "perfect" : "good" };
-  return { kind: "soda", quality: "good" };
+  if (kind === "fryer") return { sig: "fries_cook", build: buildCookingFries, motion: "shake", cook: "fries" };
+  return { sig: "soda", build: () => buildFood("soda"), motion: "bob" };
+}
+
+// Cooking colour ramps (module-level so tinting allocates nothing per frame).
+const _rawPatty = new THREE.Color(0xe0697b);
+const _searedPatty = new THREE.Color(0x7a4a2a);
+const _charPatty = new THREE.Color(0x35200f);
+const _paleFries = new THREE.Color(0xe8d9a0);
+const _goldFries = new THREE.Color(0xe6a634);
+const _deepFries = new THREE.Color(0xc6862a);
+
+interface PattyCookMats { body: THREE.MeshStandardMaterial; sear: THREE.MeshStandardMaterial; sheen: THREE.MeshStandardMaterial; }
+interface FriesCookMats { fries: THREE.MeshStandardMaterial; sheen: THREE.MeshStandardMaterial; }
+
+/** Brown the patty as it sears, fade in the crust marks, and bloom a glossy
+ *  sheen + warm glow through the perfect window. */
+function tintCookingPatty(g: THREE.Group, slot: CookSlot): void {
+  const cook = g.userData.cook as PattyCookMats | undefined;
+  if (!cook) return;
+  const { t, cookT, perfT, burnT } = slot;
+  const done = clamp(t / Math.max(0.01, cookT), 0, 1);
+  const overEnd = burnT === Infinity ? perfT + 3 : burnT;
+  const over = clamp((t - perfT) / Math.max(0.01, overEnd - perfT), 0, 1);
+  cook.body.color.copy(_rawPatty).lerp(_searedPatty, done);
+  if (over > 0) cook.body.color.lerp(_charPatty, over * 0.8);
+  cook.sear.opacity = done * 0.85;
+  const pf = t >= cookT && t < perfT ? Math.sin(clamp((t - cookT) / Math.max(0.01, perfT - cookT), 0, 1) * Math.PI) : 0;
+  // A subtle juicy sheen at "perfect" — a small glossy highlight, not a glow that
+  // blooms into a flare. The browning above is the real cooking read.
+  cook.sheen.opacity = 0.32 * pf;
+  cook.sheen.emissiveIntensity = 0.12 * pf;
+  cook.body.emissiveIntensity = 0;
+}
+
+/** Brighten the fries from pale to golden as they fry; glossy sheen at golden. */
+function tintCookingFries(g: THREE.Group, slot: CookSlot): void {
+  const cook = g.userData.cook as FriesCookMats | undefined;
+  if (!cook) return;
+  const { t, cookT, perfT } = slot;
+  const done = clamp(t / Math.max(0.01, cookT), 0, 1);
+  const over = clamp((t - perfT) / 3, 0, 1); // the fryer never burns to trash
+  cook.fries.color.copy(_paleFries).lerp(_goldFries, done);
+  if (over > 0) cook.fries.color.lerp(_deepFries, over * 0.7);
+  const pf = t >= cookT && t < perfT ? Math.sin(clamp((t - cookT) / Math.max(0.01, perfT - cookT), 0, 1) * Math.PI) : 0;
+  cook.fries.emissiveIntensity = 0;
+  cook.sheen.opacity = 0.32 * pf;
+  cook.sheen.emissiveIntensity = 0.12 * pf;
 }
 
 function plateSig(parts: PlatePart[]): string {

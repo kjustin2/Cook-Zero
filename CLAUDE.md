@@ -108,10 +108,16 @@ combo HUD bump — re-triggered via the `void el.offsetWidth` reflow trick.
 - **Cook timing** per slot, baked at placement using the station's adjacency
   speed: cooking `[0,cookT)` → perfect `[cookT,perfT)` → overdone `[perfT,burnT)`
   → burnt (grills only; fryers/soda never burn).
-- **Cooking feel:** slot food animates by kind in `sceneView` — grill patties
-  periodically somersault-**flip**, fries **shimmy**, and every item/plate part
-  **pops** (squash-stretch) when placed. The chef plays a chop/flip arm-pump
-  driven by a `chef.cookT` pulse set in `interact.ts` when cooking/pouring/plating.
+- **Cooking feel:** food on a grill/fryer slot is a single persistent "cooking"
+  mesh (`buildCookingPatty`/`buildCookingFries`) that the renderer **tints every
+  frame** from the slot timer — the patty browns continuously raw-pink → seared →
+  overdone (then swaps to the charred `burnt` mesh), fries pale → golden — with a
+  subtle gloss at the perfect window (`slotMeshSpec` + `tintCooking*` in
+  `sceneView`). Patties still somersault-**flip**, fries **shimmy**, and every
+  item/plate part **pops** (squash-stretch) when placed. The grill models a
+  recessed ember firebox + cast-iron grate + backsplash; its warm point light
+  sits high so it never over-lights the embers into a bloom flare. The chef plays
+  a chop/flip arm-pump driven by a `chef.cookT` pulse set in `interact.ts`.
 - **Interactions** live in `interact.ts` `actionFor()` — returns `{label,run}` for
   the nearest interactable; the label is the SPACE hint. Serving is **proximity
   table service**: the chef must walk up to a seated guest within `SERVE_REACH`
