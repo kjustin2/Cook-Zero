@@ -81,6 +81,74 @@ function rivets(y: number, z: number, count = 4): THREE.Mesh[] {
   return out;
 }
 
+/** Vertically squash a sphere into a soft dome/puck. */
+function dome(mesh: THREE.Mesh, sy: number): THREE.Mesh {
+  mesh.scale.y = sy;
+  return mesh;
+}
+
+// Shared, cheap geometries for the little heaps of food filling the bins (one
+// per kind so a binful of items is a handful of draw calls, not dozens).
+const POTATO_GEO = new THREE.IcosahedronGeometry(0.17, 0);
+const LEAF_GEO = new THREE.IcosahedronGeometry(0.2, 0);
+
+/** A small heap of the bin's actual ingredient, resting in the open crate so it
+ *  clearly reads as a box holding that food. `topY` is the crate's rim height. */
+function crateFill(defId: string, topY: number): THREE.Mesh[] {
+  const out: THREE.Mesh[] = [];
+  const put = (m: THREE.Mesh, x: number, dy: number, z: number): void => {
+    m.position.set(x, topY + dy, z);
+    out.push(m);
+  };
+  switch (defId) {
+    case "bin_bun": {
+      const mat = stdMat(0xeab867, { rough: 0.45, metal: 0.03 });
+      for (const [x, z] of [[-0.18, 0.05], [0.2, -0.05], [0.0, 0.2]] as const) {
+        put(dome(sphere(0.21, mat, 12), 0.6), x, 0.04, z);
+      }
+      break;
+    }
+    case "bin_potato": {
+      const mat = stdMat(0xc8a063, { rough: 0.85, flat: true });
+      for (const [x, z, ry] of [[-0.16, 0.0, 0.4], [0.16, 0.1, -0.5], [0.0, -0.16, 0.9]] as const) {
+        const p = new THREE.Mesh(POTATO_GEO, mat);
+        p.castShadow = true;
+        p.scale.set(1.35, 0.9, 0.95);
+        p.rotation.y = ry;
+        put(p, x, 0.03, z);
+      }
+      break;
+    }
+    case "bin_cheese": {
+      const mat = stdMat(0xffcf45, { rough: 0.3, metal: 0.05 });
+      for (let i = 0; i < 4; i++) {
+        const slice = box(0.5, 0.04, 0.5, mat);
+        slice.rotation.y = 0.22 * i;
+        put(slice, 0.02 * (i % 2) - 0.01, -0.02 + i * 0.05, 0.02 * (i % 2));
+      }
+      break;
+    }
+    case "bin_lettuce": {
+      const mats = [stdMat(0x6cbf52, { rough: 0.6, flat: true }), stdMat(0x98e07a, { rough: 0.55, flat: true })];
+      for (const [x, z, m] of [[-0.15, 0.05, 0], [0.16, -0.02, 1], [0.0, 0.18, 0]] as const) {
+        const leaf = new THREE.Mesh(LEAF_GEO, mats[m]);
+        leaf.castShadow = true;
+        leaf.scale.set(1.05, 0.7, 1.05);
+        put(leaf, x, 0.04, z);
+      }
+      break;
+    }
+    case "bin_tomato": {
+      const mat = stdMat(0xf2543c, { rough: 0.25, metal: 0.03 });
+      for (const [x, z] of [[-0.15, 0.04], [0.16, -0.04], [0.0, 0.16]] as const) {
+        put(sphere(0.16, mat, 12), x, 0.04, z);
+      }
+      break;
+    }
+  }
+  return out;
+}
+
 function buildGrill(): THREE.Group {
   const bodyH = 0.78;
   const legH = 0.22;
@@ -111,6 +179,15 @@ function buildGrill(): THREE.Group {
 
   const trim = trimBand(legH + bodyH * 0.82);
 
+  // A spatula resting on the cooktop edge + a little grease cup beside it.
+  const steelUten = stdMat(0xc6ccd2, { metal: 0.9, rough: 0.22 });
+  const spatHead = box(0.24, 0.02, 0.22, steelUten);
+  spatHead.position.set(0.28, topY + 0.08, 0.28);
+  const spatHandle = box(0.045, 0.03, 0.34, stdMat(0x2a2d33, { rough: 0.5 }));
+  spatHandle.position.set(0.28, topY + 0.09, 0.55);
+  const greaseCup = cyl(0.1, 0.08, 0.12, stdMat(0x8a8f98, { metal: 0.7, rough: 0.35 }), 12);
+  greaseCup.position.set(-0.48, topY + 0.12, 0.4);
+
   const g = group(
     ...legs(legH),
     cabinet,
@@ -121,6 +198,9 @@ function buildGrill(): THREE.Group {
     k1,
     k2,
     trim,
+    spatHead,
+    spatHandle,
+    greaseCup,
     ...rivets(legH + bodyH * 0.18, FOOT / 2 + 0.01, 4),
   );
   const slotY = topY + 0.1;
@@ -170,7 +250,19 @@ function buildFryer(): THREE.Group {
   const dial = knob(0.4, legH + bodyH * 0.55, FOOT / 2 + 0.05, 0xe0922f);
   const trim = trimBand(legH + bodyH * 0.85);
 
-  const g = group(...legs(legH), cabinet, cooktop, ...wells, panel, dial, trim);
+  // A little salt shaker + a chip scoop standing on the front lip.
+  const shakerBody = cyl(0.07, 0.08, 0.16, stdMat(0xf4f1e8, { rough: 0.4, transparent: true, opacity: 0.85 }), 12);
+  shakerBody.position.set(-0.5, topY + 0.11, 0.5);
+  const shakerCap = cyl(0.072, 0.072, 0.05, stdMat(0x9aa0a8, { metal: 0.8, rough: 0.3 }), 12);
+  shakerCap.position.set(-0.5, topY + 0.21, 0.5);
+  const scoop = box(0.18, 0.16, 0.2, stdMat(0xd2d6db, { metal: 0.85, rough: 0.28 }));
+  scoop.position.set(0.5, topY + 0.12, 0.52);
+  scoop.rotation.x = -0.35;
+  const scoopGrip = cyl(0.022, 0.022, 0.2, stdMat(0x2a2d33, { rough: 0.5 }), 8);
+  scoopGrip.position.set(0.5, topY + 0.22, 0.66);
+  scoopGrip.rotation.x = 0.7;
+
+  const g = group(...legs(legH), cabinet, cooktop, ...wells, panel, dial, trim, shakerBody, shakerCap, scoop, scoopGrip);
   const slotY = topY + 0.16;
   setSlots(g, [new THREE.Vector3(-0.45, slotY, 0), new THREE.Vector3(0.45, slotY, 0)]);
   return g;
@@ -198,7 +290,22 @@ function buildPrep(): THREE.Group {
   handle.position.set(0, legH + bodyH * 0.6, FOOT / 2 + 0.04);
   const trim = trimBand(legH + bodyH * 0.35);
 
-  const g = group(...legs(legH), body, counter, lip, board, handle, trim);
+  // A chef's knife laid across the front-left of the board + a couple of prepped
+  // bits in the back-right corner so it reads as a working station, not a slab.
+  const boardY = topY + 0.14;
+  const blade = box(0.36, 0.02, 0.11, stdMat(0xd7dbe0, { metal: 0.92, rough: 0.18 }));
+  blade.position.set(-0.34, boardY, 0.32);
+  blade.rotation.y = 0.5;
+  const knifeHandle = box(0.13, 0.04, 0.045, stdMat(0x2a2d33, { rough: 0.45 }));
+  knifeHandle.position.set(-0.56, boardY, 0.45);
+  knifeHandle.rotation.y = 0.5;
+  const tomatoBit = cyl(0.1, 0.1, 0.03, stdMat(0xf2543c, { rough: 0.25, metal: 0.03 }), 14);
+  tomatoBit.position.set(0.42, boardY, -0.2);
+  const lettuceBit = new THREE.Mesh(LEAF_GEO, stdMat(0x6cbf52, { rough: 0.6, flat: true }));
+  lettuceBit.scale.set(0.9, 0.5, 0.9);
+  lettuceBit.position.set(0.3, boardY + 0.02, 0.0);
+
+  const g = group(...legs(legH), body, counter, lip, board, handle, trim, blade, knifeHandle, tomatoBit, lettuceBit);
   setSlots(g, [new THREE.Vector3(0, topY + 0.16, 0)]);
   return g;
 }
@@ -237,7 +344,19 @@ function buildDrink(): THREE.Group {
     nozzles.push(lever);
   }
 
-  const g = group(base, tower, towerTrim, dripTray, grate, ...nozzles);
+  // A short stack of empty cups waiting to be filled, on the front-left.
+  const cups: THREE.Mesh[] = [];
+  const cupMat = stdMat(0xfafaff, { rough: 0.3, metal: 0.04 });
+  for (let i = 0; i < 3; i++) {
+    const cup = cyl(0.12, 0.09, 0.16, cupMat, 14);
+    cup.position.set(-0.62, topY + 0.1 + i * 0.05, 0.36);
+    cups.push(cup);
+  }
+  // A glowing brand panel on the tower front so the fountain reads lively.
+  const brand = box(FOOT * 0.5, 0.3, 0.02, stdMat(0x9fe3ff, { emissive: 0x4fbfff, emissiveIntensity: 0.7, rough: 0.4 }));
+  brand.position.set(0, topY + 0.5, -0.27);
+
+  const g = group(base, tower, towerTrim, dripTray, grate, ...nozzles, ...cups, brand);
   const slotY = topY + 0.06;
   setSlots(g, [new THREE.Vector3(-0.45, slotY, 0.4), new THREE.Vector3(0.45, slotY, 0.4)]);
   return g;
@@ -296,9 +415,23 @@ function buildBin(defId: string): THREE.Group {
     const seam = box(FOOT * 0.86, 0.03, 0.05, stdMat(0x9aa0a8, { metal: 0.7, rough: 0.4 }));
     seam.position.set(0, bodyH * 0.62, FOOT / 2 + 0.02);
     children.push(seam);
+    // A frosted glass window in the upper door revealing a stack of raw patties.
+    const winY = bodyH * 0.66;
+    const patties = box(FOOT * 0.5, 0.04, FOOT * 0.5, stdMat(0xe0697b, { rough: 0.45 }));
+    for (let i = 0; i < 3; i++) {
+      const p = patties.clone();
+      p.position.set(0, winY - 0.12 + i * 0.07, FOOT / 2 - 0.06);
+      children.push(p);
+    }
+    const glass = box(FOOT * 0.62, bodyH * 0.34, 0.03, stdMat(0xcfe6ef, { rough: 0.05, metal: 0.1, transparent: true, opacity: 0.34 }));
+    glass.position.set(0, winY, FOOT / 2 + 0.05);
+    children.push(glass);
+    const frame = box(FOOT * 0.7, bodyH * 0.42, 0.03, stdMat(0x9aa0a8, { metal: 0.8, rough: 0.3 }));
+    frame.position.set(0, winY, FOOT / 2 + 0.035);
+    children.push(frame);
     // Patty-coloured accent stripe so it still reads as the patty source.
     const accent = box(FOOT * 0.86, 0.06, 0.02, stdMat(color, { rough: 0.6 }));
-    accent.position.set(0, bodyH * 0.18, FOOT / 2 + 0.03);
+    accent.position.set(0, bodyH * 0.16, FOOT / 2 + 0.03);
     children.push(accent);
   } else {
     // Lighter front panel keyed to the bin colour.
@@ -309,18 +442,26 @@ function buildBin(defId: string): THREE.Group {
     const handle = box(0.5, 0.07, 0.06, stdMat(0x3a3d42, { metal: 0.7, rough: 0.35 }));
     handle.position.set(0, bodyH * 0.62, FOOT / 2 + 0.05);
     children.push(handle);
-    // Crate lid rim on top, with a thin metallic clasp.
-    const lid = box(FOOT * 0.98, 0.08, FOOT * 0.98, stdMat(mix(color, 0x000000, 0.18), { rough: 0.7 }));
-    lid.position.y = bodyH + 0.04;
-    children.push(lid);
-    const clasp = box(0.16, 0.06, 0.05, stdMat(0x9aa0a8, { metal: 0.8, rough: 0.3 }));
-    clasp.position.set(0, bodyH + 0.02, FOOT / 2 + 0.02);
-    children.push(clasp);
+    // Open-topped crate: a thin rim frame around the mouth (instead of a solid
+    // lid) so the ingredient heaped inside is visible.
+    const rimMat = stdMat(mix(color, 0x000000, 0.2), { rough: 0.7 });
+    for (const [w, d, x, z] of [
+      [FOOT * 0.98, 0.1, 0, FOOT * 0.44],
+      [FOOT * 0.98, 0.1, 0, -FOOT * 0.44],
+      [0.1, FOOT * 0.78, FOOT * 0.44, 0],
+      [0.1, FOOT * 0.78, -FOOT * 0.44, 0],
+    ] as const) {
+      const rail = box(w, 0.09, d, rimMat);
+      rail.position.set(x, bodyH + 0.02, z);
+      children.push(rail);
+    }
+    // …and the food itself, brimming over the rim.
+    children.push(...crateFill(defId, bodyH));
   }
 
   // Small label plate on the front (both kinds).
   const label = box(0.42, 0.22, 0.02, stdMat(0xf4f1e8, { rough: 0.8 }));
-  label.position.set(0, bodyH * (isFridge ? 0.34 : 0.3), FOOT / 2 + 0.05);
+  label.position.set(0, bodyH * (isFridge ? 0.28 : 0.3), FOOT / 2 + 0.05);
   children.push(label);
 
   const g = group(...children);
