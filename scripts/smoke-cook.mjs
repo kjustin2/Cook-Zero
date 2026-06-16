@@ -56,7 +56,7 @@ const fail = await withGame(async ({ page, check }) => {
       look: { skin: 0, shirt: 0, hair: 0, hat: false }, bob: 0,
     });
     G.chef.x = 0;
-    G.chef.z = -1;
+    G.chef.z = -3.0;
     const before = G.coins;
     log.serveLabel = SR.interact();
     log.coins = G.coins - before;

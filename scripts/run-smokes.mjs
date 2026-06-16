@@ -12,6 +12,7 @@ const SMOKES = [
   "smoke-adjacency.mjs",
   "smoke-economy.mjs",
   "smoke-cook.mjs",
+  "smoke-tables.mjs",
   "smoke-events.mjs",
   "smoke-systems.mjs",
   "smoke-balance.mjs",

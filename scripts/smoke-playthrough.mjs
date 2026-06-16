@@ -97,6 +97,7 @@ const fail = await withGame(async ({ page, check }) => {
   // Death path: play again (intro → setup → open), then fail night 1's quota.
   await clickText(/Play Again/);
   await page.evaluate(() => window.__SR.skipStory());
+  await page.waitForTimeout(250); // let the setup hub render its Open Night button
   await clickText(/Open Night/);
   check("Play Again restarts the run", (await phase()) === "playing", `phase=${await phase()}`);
   await forceEndShift(false);

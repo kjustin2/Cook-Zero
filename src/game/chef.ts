@@ -2,14 +2,34 @@
 // interact trigger. The chef roams the kitchen on the +Z side of the counter.
 
 import type { Ctx } from "./ctx";
+import type { Chef } from "./types";
 import { actionFor } from "./interact";
-import { cellOfWorld, isSolidAt, worldOfCell, COUNTER_Z, TILE } from "./grid";
+import { cellOfWorld, isSolidAt, worldOfCell, TILE } from "./grid";
+import { BARRIERS, DINING_MIN_Z } from "./dining";
 import { DASH_CD, DASH_MULT, DASH_TIME } from "./balance";
 import { clamp, damp } from "../core/math";
 
 const MOVE_SPEED = 6.6;
 const CHEF_R = 0.42;
 const CELL_HALF = TILE * 0.38; // solid footprint half-extent (gaps to walk)
+
+/** Resolve the chef circle out of the static dining colliders (counter + tables). */
+function resolveBarriersAxis(chef: Chef, axis: "x" | "z"): void {
+  for (const b of BARRIERS) {
+    const minX = b.minX - CHEF_R;
+    const maxX = b.maxX + CHEF_R;
+    const minZ = b.minZ - CHEF_R;
+    const maxZ = b.maxZ + CHEF_R;
+    if (chef.x <= minX || chef.x >= maxX || chef.z <= minZ || chef.z >= maxZ) continue;
+    if (axis === "x") {
+      chef.x = chef.x - minX < maxX - chef.x ? minX : maxX;
+      chef.vx = 0;
+    } else {
+      chef.z = chef.z - minZ < maxZ - chef.z ? minZ : maxZ;
+      chef.vz = 0;
+    }
+  }
+}
 
 function resolveAxis(ctx: Ctx, axis: "x" | "z"): void {
   const { G } = ctx;
@@ -90,14 +110,16 @@ export function updateChef(ctx: Ctx, dt: number): void {
 
   chef.x += chef.vx * dt;
   resolveAxis(ctx, "x");
+  resolveBarriersAxis(chef, "x");
   chef.z += chef.vz * dt;
   resolveAxis(ctx, "z");
+  resolveBarriersAxis(chef, "z");
 
-  // Play-area bounds.
+  // Play-area bounds — the chef may now roam the dining floor (front of counter).
   const halfW = (G.grid.cols / 2) * TILE + 0.6;
   const backZ = worldOfCell(G.grid, 0, G.grid.rows - 1).z + TILE * 0.7;
   chef.x = clamp(chef.x, -halfW, halfW);
-  chef.z = clamp(chef.z, COUNTER_Z + 0.7, backZ);
+  chef.z = clamp(chef.z, DINING_MIN_Z, backZ);
 
   const moving = len > 0.01 || chef.dashT > 0;
   if (len > 0.01) chef.face = Math.atan2(nx, -nz); // face the heading

@@ -8,13 +8,14 @@ import type { GameState, Carry, IngredientId, PlacedItem, PlatePart } from "../g
 import type { Input } from "../core/input";
 import { def, RECIPES } from "../game/catalog";
 import { items, worldOfCell, cellOfWorld, TILE, COUNTER_Z, CUSTOMER_Z } from "../game/grid";
+import { TABLES, GAP_HALF, HALF_W } from "../game/dining";
 import { pullQuality } from "../game/cooking";
 import { Stage } from "./stage";
 import { buildStation } from "./stations";
 import { buildDecor } from "./decor";
 import { buildFood, buildPlate, type FoodKind, type FoodQuality } from "./food";
 import { buildChef, buildCustomer, type ChefRig, type CustomerRig } from "./actors";
-import { stdMat, cyl, sphere, group, canvasTex, disposeTree } from "./kit";
+import { stdMat, box, cyl, sphere, group, canvasTex, disposeTree } from "./kit";
 import { damp, easeOutBack } from "../core/math";
 
 /** Dispose only geometries in a subtree (leaves materials alone — used for actor
@@ -94,6 +95,29 @@ export class SceneView {
     this.scene.add(this.cursorTile);
   }
 
+  /** A cute round dining table with two cushioned stools. */
+  private buildTable(x: number, z: number): void {
+    const woodMat = stdMat(0x9c5a2e, { rough: 0.6 });
+    const t = group();
+    const topT = cyl(0.72, 0.72, 0.12, stdMat(0xcf8f55, { rough: 0.45 }), 18);
+    topT.position.y = 0.92;
+    const ped = cyl(0.13, 0.18, 0.9, woodMat, 10);
+    ped.position.y = 0.46;
+    const base = cyl(0.42, 0.42, 0.08, woodMat, 14);
+    base.position.y = 0.04;
+    t.add(topT, ped, base);
+    const cushMat = stdMat(0xff8fae, { rough: 0.7 });
+    for (const sz of [0.98, -0.98]) {
+      const seat = cyl(0.26, 0.26, 0.12, cushMat, 12);
+      seat.position.set(0, 0.5, sz);
+      const leg = cyl(0.05, 0.07, 0.5, woodMat, 8);
+      leg.position.set(0, 0.22, sz);
+      t.add(seat, leg);
+    }
+    t.position.set(x, 0, z);
+    this.scene.add(t);
+  }
+
   // ── Static environment ──────────────────────────────────────────────────
   private buildEnvironment(G: GameState): void {
     const cols = G.grid.cols;
@@ -132,23 +156,20 @@ export class SceneView {
     dining.receiveShadow = true;
     this.scene.add(dining);
 
-    // Service counter.
-    const counter = group();
-    const top = new THREE.Mesh(
-      new THREE.BoxGeometry(width - 1, 0.2, 1.1),
-      stdMat(0xb9c2cc, { rough: 0.4, metal: 0.3 }),
-    );
-    top.position.set(0, 1.0, COUNTER_Z);
-    top.castShadow = true;
-    top.receiveShadow = true;
-    const body = new THREE.Mesh(
-      new THREE.BoxGeometry(width - 1, 1.0, 0.9),
-      stdMat(0x7a5a3c, { rough: 0.7 }),
-    );
-    body.position.set(0, 0.5, COUNTER_Z);
-    body.receiveShadow = true;
-    counter.add(top, body);
-    this.scene.add(counter);
+    // Service counter — two segments with a central gap the chef walks through.
+    const counterTopMat = stdMat(0xb9c2cc, { rough: 0.4, metal: 0.3 });
+    const counterBodyMat = stdMat(0x7a5a3c, { rough: 0.7 });
+    for (const seg of [[-HALF_W, -GAP_HALF], [GAP_HALF, HALF_W]]) {
+      const w = seg[1] - seg[0];
+      const cx = (seg[0] + seg[1]) / 2;
+      const top = box(w, 0.2, 1.1, counterTopMat);
+      top.position.set(cx, 1.0, COUNTER_Z);
+      const body = box(w, 1.0, 0.9, counterBodyMat);
+      body.position.set(cx, 0.5, COUNTER_Z);
+      this.scene.add(top, body);
+    }
+    // Dining tables + stools.
+    for (const tb of TABLES) this.buildTable(tb.x, tb.z);
 
     // Restaurant back wall (behind the customers) with glowing windows + neon.
     const wallZ = CUSTOMER_Z - 3.4;

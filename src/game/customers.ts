@@ -1,24 +1,18 @@
 // Customer lifecycle: arrival pacing (scaled by reputation, vibe and pricing),
-// queueing at counter spots, patience, and the served/stormed-off walk-offs.
-// A customer IS the order — there is no separate ticket list.
+// walking in to a free table, sitting with an order, patience, and the served /
+// stormed-off walk-offs to the exit. A customer IS the order — no ticket list.
 
 import type { Customer, CustomerKind, GameState, Recipe } from "./types";
 import type { Ctx } from "./ctx";
 import { RECIPES } from "./catalog";
-import { CUSTOMER_Z, TILE } from "./grid";
 import { SHIFT_LEN, SPAWN_BASE, REP_EXPIRE, CUSTOMER_KINDS } from "./balance";
+import { TABLES, TABLE_COUNT, ENTRANCE, EXIT } from "./dining";
 import { nextUid } from "./state";
-import { clamp, lerp } from "../core/math";
+import { clamp, lerp, dist } from "../core/math";
 
-const SPOTS = 5;
-const SPOT_GAP = 2.7;
-const WALK_SPEED = 3.4;
-const LEAVE_SPEED = 3.6;
-const STORM_SPEED = 5.4;
-
-const spotX = (i: number): number => (i - (SPOTS - 1) / 2) * SPOT_GAP;
-const enterX = (g: GameState): number => -((g.grid.cols / 2) * TILE + 4);
-const exitX = (g: GameState): number => (g.grid.cols / 2) * TILE + 5;
+const WALK_SPEED = 3.2;
+const LEAVE_SPEED = 3.4;
+const STORM_SPEED = 5.0;
 
 export function basePatience(s: GameState): number {
   return clamp(52 - s.day * 3, 24, 52) * s.derived.patience;
@@ -36,9 +30,9 @@ function availableRecipes(s: GameState): Recipe[] {
   return RECIPES.filter((r) => r.minDay <= s.day);
 }
 
-function freeSpot(s: GameState): number {
+function freeTable(s: GameState): number {
   const used = new Set(s.customers.filter((c) => c.state !== "leaving").map((c) => c.spot));
-  for (let i = 0; i < SPOTS; i++) if (!used.has(i)) return i;
+  for (let i = 0; i < TABLE_COUNT; i++) if (!used.has(i)) return i;
   return -1;
 }
 
@@ -55,8 +49,8 @@ function rollKind(ctx: Ctx): CustomerKind {
 
 function spawnCustomer(ctx: Ctx): void {
   const { G, rng } = ctx;
-  const spot = freeSpot(G);
-  if (spot < 0) return;
+  const spot = freeTable(G);
+  if (spot < 0) return; // restaurant is full — they'll come back later
   const pool = availableRecipes(G);
   const recipe = rng.weighted(pool.map((r) => ({ item: r, weight: r.weight })));
   const kind = rollKind(ctx);
@@ -69,8 +63,8 @@ function spawnCustomer(ctx: Ctx): void {
     payMult: kd.pay,
     repMult: kd.rep,
     spot,
-    x: enterX(G),
-    z: CUSTOMER_Z,
+    x: ENTRANCE.x,
+    z: ENTRANCE.z,
     state: "walkin",
     patience: maxP,
     maxPatience: maxP,
@@ -102,6 +96,21 @@ function expire(ctx: Ctx, c: Customer): void {
   ctx.fx.shake(c.kind === "critic" ? 0.2 : 0.12);
 }
 
+/** Move a customer toward a target point; returns true on arrival. */
+function moveTo(c: Customer, tx: number, tz: number, speed: number, dt: number): boolean {
+  const dx = tx - c.x;
+  const dz = tz - c.z;
+  const d = Math.hypot(dx, dz);
+  if (d < 0.12) {
+    c.x = tx;
+    c.z = tz;
+    return true;
+  }
+  c.x += (dx / d) * speed * dt;
+  c.z += (dz / d) * speed * dt;
+  return false;
+}
+
 export function updateCustomers(ctx: Ctx, dt: number): void {
   const { G } = ctx;
 
@@ -114,12 +123,10 @@ export function updateCustomers(ctx: Ctx, dt: number): void {
 
   for (const c of G.customers) {
     c.bob += dt;
-    const tx = spotX(c.spot);
+    const table = TABLES[c.spot];
     switch (c.state) {
       case "walkin": {
-        c.x += Math.sign(tx - c.x) * WALK_SPEED * dt;
-        if (Math.abs(tx - c.x) < 0.1) {
-          c.x = tx;
+        if (table && moveTo(c, table.x, table.z, WALK_SPEED, dt)) {
           c.state = "waiting";
           c.patience = c.maxPatience;
         }
@@ -128,7 +135,6 @@ export function updateCustomers(ctx: Ctx, dt: number): void {
       case "waiting": {
         c.patience -= dt;
         c.anger = clamp(1 - c.patience / (c.maxPatience * 0.45), 0, 1);
-        // Cute impatience puff (rare, so it doesn't spam).
         if (c.anger > 0.55 && ctx.rng.chance(dt * 0.5)) {
           ctx.fx.float("💢", c.x + 0.5, c.z + 1.0, { color: "#ff7a7a" });
         }
@@ -141,16 +147,14 @@ export function updateCustomers(ctx: Ctx, dt: number): void {
         break;
       }
       case "leaving": {
-        const sp = c.happy ? LEAVE_SPEED : STORM_SPEED;
-        c.x += sp * dt;
+        moveTo(c, EXIT.x, EXIT.z, c.happy ? LEAVE_SPEED : STORM_SPEED, dt);
         break;
       }
     }
   }
 
-  // Reap customers that left the scene.
-  const ex = exitX(G);
-  G.customers = G.customers.filter((c) => !(c.state === "leaving" && c.x > ex));
+  // Reap customers that reached the exit.
+  G.customers = G.customers.filter((c) => !(c.state === "leaving" && dist(c.x, c.z, EXIT.x, EXIT.z) < 1.2));
 }
 
 /** Combo decay between serves (called from the sim each frame). */
@@ -163,5 +167,3 @@ export function updateCombo(s: GameState, dt: number): void {
     }
   }
 }
-
-export { SPOTS, spotX };

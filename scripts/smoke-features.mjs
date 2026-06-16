@@ -19,7 +19,7 @@ const fail = await withGame(async ({ page, check }) => {
     go(prep.col, prep.row); SR.interact(); // pick up plate
     const burger = G.recipes.find((r) => r.id === "burger");
     G.customers = [{ uid: 1, recipe: burger, kind: "normal", payMult: 1, repMult: 1, spot: 2, x: 0, z: -4.3, state: "waiting", patience: 30, maxPatience: 30, anger: 0, servedT: 0, happy: false, look: { skin: 0, shirt: 0, hair: 0, hat: false }, bob: 0 }];
-    G.chef.x = 0; G.chef.z = -1; SR.interact(); SR.tick(0.05);
+    G.chef.x = 0; G.chef.z = -3.0; SR.interact(); SR.tick(0.05);
     log.done = G.tutorial;
     log.served = G.stats.served;
     return log;

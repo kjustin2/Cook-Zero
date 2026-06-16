@@ -26,7 +26,7 @@ const fail = await withGame(async ({ page, check }) => {
         servedT: 0, happy: false, look: { skin: 0, shirt: 0, hair: 0, hat: false }, bob: 0,
       });
       G.carry = { kind: "plate", parts: [{ id: "bun", quality: "good" }, { id: "patty", quality: "good" }] };
-      G.chef.x = 0; G.chef.z = -1;
+      G.chef.x = 0; G.chef.z = -3.0;
       const coins0 = G.coins;
       const rep0 = G.rep;
       SR.interact();

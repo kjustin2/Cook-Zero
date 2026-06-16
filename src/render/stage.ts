@@ -30,8 +30,8 @@ export class Stage {
   private composer!: EffectComposer;
   private trauma = 0;
   private zoom = 0;
-  private readonly baseCamPos = new THREE.Vector3(0, 15.6, 14.0);
-  private readonly lookAt = new THREE.Vector3(0, 0.5, 3.1);
+  private readonly baseCamPos = new THREE.Vector3(0, 18.5, 17.5);
+  private readonly lookAt = new THREE.Vector3(0, 0.4, 0.6);
   private readonly dolly: THREE.Vector3;
   private time = 0;
 
@@ -62,7 +62,7 @@ export class Stage {
     this.scene.environmentIntensity = 0.46;
     pmrem.dispose();
 
-    this.camera = new THREE.PerspectiveCamera(41, window.innerWidth / window.innerHeight, 0.5, 200);
+    this.camera = new THREE.PerspectiveCamera(46, window.innerWidth / window.innerHeight, 0.5, 200);
     this.camera.position.copy(this.baseCamPos);
     this.camera.lookAt(this.lookAt);
     this.dolly = this.lookAt.clone().sub(this.baseCamPos).normalize();

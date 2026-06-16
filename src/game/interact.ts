@@ -9,7 +9,7 @@ import { worldOfCell, items } from "./grid";
 import { clearSlot, freeSlot, pullQuality, startSlot } from "./cooking";
 import { serveCustomer } from "./serving";
 import { dist } from "../core/math";
-import { COUNTER_Z } from "./grid";
+import { SERVE_REACH } from "./dining";
 
 export interface Action {
   label: string;
@@ -17,8 +17,6 @@ export interface Action {
 }
 
 const REACH = 2.55;
-const SERVE_X = 1.7; // how aligned with a customer you must be
-const SERVE_NEAR_Z = 2.4; // how close to the counter the chef must be
 
 const PART_LABEL: Record<string, string> = {
   patty: "patty",
@@ -52,16 +50,16 @@ export function actionFor(ctx: Ctx): Action | null {
     }
   };
 
-  // ── Counter serving (only matters with a plate in hand) ──
+  // ── Table service: serve a seated guest you're standing next to ──
   const plate = carryPlate(G.carry);
-  if (plate && chef.z < COUNTER_Z + SERVE_NEAR_Z) {
+  if (plate) {
     let cust: Customer | null = null;
-    let cd = SERVE_X;
+    let cd = SERVE_REACH;
     for (const c of G.customers) {
       if (c.state !== "waiting") continue;
-      const dx = Math.abs(c.x - chef.x);
-      if (dx < cd) {
-        cd = dx;
+      const d = dist(chef.x, chef.z, c.x, c.z);
+      if (d < cd) {
+        cd = d;
         cust = c;
       }
     }
