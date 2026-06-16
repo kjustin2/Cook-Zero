@@ -2,8 +2,9 @@
 
 A real-time **3D arcade kitchen roguelite** built with Three.js. You directly
 control a chef inside a restaurant — grab ingredients, cook on the grill & fryer,
-plate dishes, and serve customers across the counter before their patience runs
-out. Survive six escalating dinner rushes, each with a cash quota.
+plate dishes, then leave the kitchen to serve customers at their tables before
+their patience runs out. Survive six escalating dinner rushes, each with a cash
+quota.
 
 The twist: between shifts you **rebuild and decorate your kitchen** on a tile
 floor plan, and **placement matters** — a fan next to the grill speeds cooking,
