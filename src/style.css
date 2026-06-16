@@ -355,3 +355,14 @@ button.btn:disabled { filter: grayscale(0.7) brightness(0.7); cursor: not-allowe
   filter: drop-shadow(0 4px 0 #b8431a) drop-shadow(0 8px 36px rgba(255,140,60,0.45));
 }
 .dc-sub { font-family: var(--font-display); font-size: 22px; color: var(--ink); font-weight: 700; letter-spacing: 4px; text-transform: uppercase; }
+
+/* ── Tutorial callout ── */
+.tutorial {
+  position: absolute; top: 88px; left: 50%; transform: translateX(-50%);
+  max-width: 560px; text-align: center;
+  background: var(--panel); border: 1px solid var(--line); border-top: 2px solid var(--good);
+  border-radius: 16px; padding: 10px 24px; backdrop-filter: blur(8px);
+  box-shadow: 0 10px 30px rgba(0,0,0,0.45); animation: rise-in 0.3s ease;
+}
+.tut-step { font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--good); font-weight: 800; margin-bottom: 2px; }
+.tut-text { font-size: 16px; font-weight: 700; }

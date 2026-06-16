@@ -12,6 +12,7 @@ export interface MetaSave {
   runs: number;
   muted: boolean;
   quality: "high" | "low";
+  tutorialDone: boolean;
 }
 
 const DEFAULT: MetaSave = {
@@ -23,6 +24,7 @@ const DEFAULT: MetaSave = {
   runs: 0,
   muted: false,
   quality: "high",
+  tutorialDone: false,
 };
 
 export function loadMeta(): MetaSave {

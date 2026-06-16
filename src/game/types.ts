@@ -349,6 +349,7 @@ export interface GameState {
   dayCard: DayCard | null;
   muted: boolean;
   quality: "high" | "low";
+  tutorial: number; // current tutorial step, or -1 when inactive/done
 }
 
 export interface BuildState {

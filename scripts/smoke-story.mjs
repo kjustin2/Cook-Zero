@@ -20,21 +20,27 @@ const fail = await withGame(async ({ page, check }) => {
   const typed = await page.evaluate(() => window.__G.cutscene?.typed || 0);
   check("dialogue types out over time", typed > 1, `typed=${typed.toFixed(0)}`);
 
-  // Space advances through the beats into gameplay.
-  for (let i = 0; i < 14; i++) {
+  // Space advances through the beats into the setup hub.
+  for (let i = 0; i < 16; i++) {
     if (await page.evaluate(() => window.__G.phase !== "cutscene")) break;
     await page.keyboard.press("Space");
     await page.waitForTimeout(90);
   }
-  const after = await page.evaluate(() => ({ phase: window.__G.phase, day: window.__G.day, card: window.__G.dayCard?.title }));
-  check("advancing the intro starts night 1", after.phase === "playing" && after.day === 1, `phase=${after.phase}`);
-  check("a Night title card appears", !!after.card, `card=${after.card}`);
+  const after = await page.evaluate(() => ({ phase: window.__G.phase, day: window.__G.day }));
+  check("intro leads to the setup hub", after.phase === "manage" && after.day === 1, `phase=${after.phase}`);
+
+  // Open the night → play + a title card.
+  await page.locator("button", { hasText: /Open Night/ }).click();
+  await page.waitForTimeout(250);
+  const open = await page.evaluate(() => ({ phase: window.__G.phase, card: window.__G.dayCard?.title }));
+  check("opening the night starts play", open.phase === "playing", `phase=${open.phase}`);
+  check("a Night title card appears", !!open.card, `card=${open.card}`);
 
   // Night 3 has its own cutscene.
   const d3 = await page.evaluate(() => {
     const SR = window.__SR, G = window.__G;
-    G.day = 2;
-    SR.ctrl.startNextShift(); // → night 3
+    G.day = 3;
+    SR.ctrl.startNextShift(); // begin night 3 → its cutscene
     return { phase: G.phase, label: G.cutscene?.label, day: G.day };
   });
   check("night 3 plays a cutscene", d3.phase === "cutscene" && d3.day === 3 && d3.label === "Night 3", `phase=${d3.phase} day=${d3.day}`);

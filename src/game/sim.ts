@@ -6,6 +6,7 @@ import { updateChef } from "./chef";
 import { updateCombo, updateCustomers } from "./customers";
 import { updateStations } from "./cooking";
 import { updateHelper } from "./helper";
+import { updateTutorial } from "./tutorial";
 import { ON_FIRE_AT } from "./balance";
 import { clamp } from "../core/math";
 
@@ -23,6 +24,7 @@ export function updatePlaying(ctx: Ctx, dt: number): void {
   updateHelper(ctx, dt);
   updateChef(ctx, dt);
   updateCombo(G, dt);
+  updateTutorial(G);
   updateFloats(ctx, dt);
 
   // Music intensity tracks the combo / on-fire state.

@@ -9,8 +9,7 @@ const fail = await withGame(async ({ page, check }) => {
     const G = window.__G;
     const log = {};
 
-    SR.ctrl.play();
-    SR.skipStory();
+    SR.quickStart();
     log.playing = G.phase === "playing" && G.day === 1;
 
     // Clear the shift by meeting quota, then run the clock out.
@@ -48,8 +47,7 @@ const fail = await withGame(async ({ page, check }) => {
     log.gameOver = G.phase === "gameOver";
 
     // Win branch: clear the final day → ending cutscene → win.
-    SR.ctrl.play();
-    SR.skipStory();
+    SR.quickStart();
     G.day = 6;
     G.dayCoins = 99999;
     G.dayTime = 0;

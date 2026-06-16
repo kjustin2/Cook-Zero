@@ -65,21 +65,31 @@ export const CATALOG: CatalogDef[] = [
   { id: "bin_tomato", name: "Tomato Bin", category: "station", kind: "bin", ingredient: "tomato", cost: 22, solid: true, color: 0xe05a44, icon: "🍅", desc: "Dispenses tomato." },
 
   // Decor — adjacency (boost neighbouring stations)
-  { id: "fan", name: "Cooling Fan", category: "decor", cost: 35, solid: false, color: 0x9fb6c4, icon: "🌀", desc: "Adjacent grills & fryers cook 20% faster.", adj: { to: ["grill", "fryer"], cookSpeedMult: 1.2 } },
-  { id: "hood", name: "Exhaust Hood", category: "decor", cost: 62, solid: false, color: 0x7d8590, icon: "💨", desc: "Adjacent grills cook 30% faster.", adj: { to: ["grill"], cookSpeedMult: 1.3 } },
-  { id: "spice", name: "Spice Rack", category: "decor", cost: 40, solid: false, color: 0xc06a3a, icon: "🧂", desc: "+0.6s perfect windows, +1 tip per serve.", global: { perfectWindow: 0.6, tipFlat: 1 } },
+  { id: "fan", name: "Cooling Fan", category: "decor", cost: 35, solid: true, color: 0x9fb6c4, icon: "🌀", desc: "Adjacent grills & fryers cook 20% faster.", adj: { to: ["grill", "fryer"], cookSpeedMult: 1.2 } },
+  { id: "hood", name: "Exhaust Hood", category: "decor", cost: 62, solid: true, color: 0x7d8590, icon: "💨", desc: "Adjacent grills cook 30% faster.", adj: { to: ["grill"], cookSpeedMult: 1.3 } },
+  { id: "spice", name: "Spice Rack", category: "decor", cost: 40, solid: true, color: 0xc06a3a, icon: "🧂", desc: "+0.6s perfect windows, +1 tip per serve.", global: { perfectWindow: 0.6, tipFlat: 1 } },
 
   // Decor — global vibe / front-of-house
-  { id: "plant", name: "Potted Plant", category: "decor", cost: 26, solid: false, color: 0x4f9d52, icon: "🪴", desc: "Cozy vibe. Calms waiting customers (best up front).", global: { vibe: 10, patienceMult: 1.04 } },
-  { id: "flowers", name: "Flower Vase", category: "decor", cost: 24, solid: false, color: 0xd56b9c, icon: "💐", desc: "Pretty vibe; a little extra patience.", global: { vibe: 8, patienceMult: 1.05 } },
-  { id: "lamp", name: "Warm Lamp", category: "decor", cost: 30, solid: false, color: 0xf2c879, icon: "💡", desc: "Warm glow. +1 tip per serve.", global: { vibe: 9, tipFlat: 1 } },
-  { id: "painting", name: "Wall Art", category: "decor", cost: 45, solid: false, color: 0x8a6bbf, icon: "🖼️", desc: "Classy. Reputation grows 20% faster.", global: { vibe: 12, repGainMult: 1.2 } },
-  { id: "speaker", name: "Speaker", category: "decor", cost: 50, solid: false, color: 0x33373d, icon: "🔊", desc: "Good tunes keep the combo alive +2s.", global: { vibe: 6, comboWindow: 2 } },
-  { id: "rug", name: "Floor Rug", category: "decor", cost: 26, solid: false, color: 0xb5573f, icon: "🧶", desc: "Walkable. Chef moves 5% faster.", global: { vibe: 4, moveSpeedMult: 1.05 } },
-  { id: "neon", name: "Neon Sign", category: "decor", cost: 70, solid: false, color: 0xff4fd8, icon: "🪧", desc: "Big vibe. Draws a bigger crowd.", global: { vibe: 16 } },
-  { id: "menuboard", name: "Menu Board", category: "decor", cost: 40, solid: false, color: 0x2f3640, icon: "📋", desc: "Reputation grows 20% faster.", global: { vibe: 5, repGainMult: 1.2 } },
-  { id: "aquarium", name: "Aquarium", category: "decor", cost: 110, solid: false, color: 0x2aa9b8, icon: "🐠", desc: "Mesmerizing. Big vibe, calmer guests.", global: { vibe: 22, patienceMult: 1.08 } },
-  { id: "tv", name: "Wall TV", category: "decor", cost: 90, solid: false, color: 0x1c2026, icon: "📺", desc: "Keeps guests entertained: vibe + combo +1s.", global: { vibe: 14, comboWindow: 1 } },
+  { id: "plant", name: "Potted Plant", category: "decor", cost: 26, solid: true, color: 0x4f9d52, icon: "🪴", desc: "Cozy vibe. Calms waiting customers (best up front).", global: { vibe: 10, patienceMult: 1.04 } },
+  { id: "flowers", name: "Flower Vase", category: "decor", cost: 24, solid: true, color: 0xd56b9c, icon: "💐", desc: "Pretty vibe; a little extra patience.", global: { vibe: 8, patienceMult: 1.05 } },
+  { id: "lamp", name: "Warm Lamp", category: "decor", cost: 30, solid: true, color: 0xf2c879, icon: "💡", desc: "Warm glow. +1 tip per serve.", global: { vibe: 9, tipFlat: 1 } },
+  { id: "painting", name: "Wall Art", category: "decor", cost: 45, solid: true, color: 0x8a6bbf, icon: "🖼️", desc: "Classy. Reputation grows 20% faster.", global: { vibe: 12, repGainMult: 1.2 } },
+  { id: "speaker", name: "Speaker", category: "decor", cost: 50, solid: true, color: 0x33373d, icon: "🔊", desc: "Good tunes keep the combo alive +2s.", global: { vibe: 6, comboWindow: 2 } },
+  { id: "rug", name: "Floor Rug", category: "decor", cost: 26, solid: false, color: 0xb5573f, icon: "🧶", desc: "Walkable! Chef moves 5% faster on it.", global: { vibe: 4, moveSpeedMult: 1.05 } },
+  { id: "neon", name: "Neon Sign", category: "decor", cost: 70, solid: true, color: 0xff4fd8, icon: "🪧", desc: "Big vibe. Draws a bigger crowd.", global: { vibe: 16 } },
+  { id: "menuboard", name: "Menu Board", category: "decor", cost: 40, solid: true, color: 0x2f3640, icon: "📋", desc: "Reputation grows 20% faster.", global: { vibe: 5, repGainMult: 1.2 } },
+  { id: "aquarium", name: "Aquarium", category: "decor", cost: 110, solid: true, color: 0x2aa9b8, icon: "🐠", desc: "Mesmerizing. Big vibe, calmer guests.", global: { vibe: 22, patienceMult: 1.08 } },
+  { id: "tv", name: "Wall TV", category: "decor", cost: 90, solid: true, color: 0x1c2026, icon: "📺", desc: "Keeps guests entertained: vibe + combo +1s.", global: { vibe: 14, comboWindow: 1 } },
+
+  // More decor — heavy customization
+  { id: "lights", name: "Fairy Lights", category: "decor", cost: 30, solid: false, color: 0xffe6a0, icon: "✨", desc: "Twinkly warm vibe. +1 tip per serve.", global: { vibe: 9, tipFlat: 1 } },
+  { id: "clock", name: "Wall Clock", category: "decor", cost: 24, solid: true, color: 0xe8e2d0, icon: "🕐", desc: "Keeps guests patient (+5%).", global: { vibe: 5, patienceMult: 1.05 } },
+  { id: "cat", name: "Café Cat", category: "decor", cost: 95, solid: true, color: 0x9a7b5a, icon: "🐱", desc: "Adorable! Big vibe + calmer guests.", global: { vibe: 16, patienceMult: 1.06 } },
+  { id: "balloons", name: "Balloons", category: "decor", cost: 28, solid: false, color: 0xff7aa8, icon: "🎈", desc: "Party vibe — draws a crowd.", global: { vibe: 11 } },
+  { id: "jukebox", name: "Jukebox", category: "decor", cost: 80, solid: true, color: 0xc23a3a, icon: "🎵", desc: "Tunes! Combo lasts +2s, good vibe.", global: { vibe: 10, comboWindow: 2 } },
+  { id: "poster", name: "Band Poster", category: "decor", cost: 22, solid: false, color: 0x6a8cff, icon: "🎤", desc: "Cool. Reputation grows 15% faster.", global: { vibe: 7, repGainMult: 1.15 } },
+  { id: "bookshelf", name: "Bookshelf", category: "decor", cost: 55, solid: true, color: 0x7a5230, icon: "📚", desc: "Cozy nook: +vibe, +6% patience.", global: { vibe: 10, patienceMult: 1.06 } },
+  { id: "candle", name: "Candle", category: "decor", cost: 18, solid: false, color: 0xffb060, icon: "🕯️", desc: "Romantic glow. +1 tip per serve.", global: { vibe: 6, tipFlat: 1 } },
 ];
 
 const BY_ID = new Map(CATALOG.map((d) => [d.id, d]));

@@ -15,6 +15,7 @@ import { buyItem, canAfford, hireHelper, upgradeHelper } from "../game/shop";
 import { setBrush } from "../game/placement";
 import { careerRank } from "../game/story";
 import { cutsceneText, currentBeat, lineComplete } from "../game/cutscene";
+import { tutorialText, tutorialStep } from "../game/tutorial";
 import { loadMeta } from "../core/save";
 
 export interface GameController {
@@ -28,6 +29,7 @@ export interface GameController {
   skipCutscene(): void;
   toggleMute(): void;
   toggleQuality(): void;
+  quitToTitle(): void;
 }
 
 type El = HTMLElement;
@@ -61,6 +63,8 @@ export class UI {
   private fxLow: El;
   private fxFire: El;
   private fxFlash: El;
+  private pauseEl: El;
+  private tutEl: El;
   private cs: { portrait: El; name: El; text: El; hint: El } | null = null;
   private refs: Record<string, El> = {};
   private lastPhase = "";
@@ -68,6 +72,8 @@ export class UI {
   private derivedSig = "";
   private lastCombo = 0;
   private lastBumpCombo = 0;
+  private pauseShown = false;
+  private lastTut = "";
 
   constructor(root: El, private ctrl: GameController, private ctx: Ctx) {
     this.hud = this.buildHud();
@@ -84,7 +90,11 @@ export class UI {
     this.fxLow = el("div", { class: "fx fx-lowtime" });
     this.fxFire = el("div", { class: "fx fx-fire" });
     this.fxFlash = el("div", { class: "fx fx-flash" });
-    root.append(fxVignette, this.fxLow, this.fxFire, this.fxFlash, this.hud, this.hint, this.toast, this.modChip, this.dayCardEl, this.derived, this.overlay);
+    this.pauseEl = el("div", { class: "overlay" });
+    this.tutEl = el("div", { class: "tutorial" });
+    root.append(fxVignette, this.fxLow, this.fxFire, this.fxFlash, this.hud, this.hint, this.toast, this.modChip, this.tutEl, this.dayCardEl, this.derived, this.overlay, this.pauseEl);
+    this.pauseEl.style.display = "none";
+    this.tutEl.style.display = "none";
     this.hud.style.display = "none";
     this.hint.style.display = "none";
     this.toast.style.display = "none";
@@ -170,6 +180,22 @@ export class UI {
       this.lastMod = "";
     }
 
+    // First-run tutorial callout.
+    const tut = playing ? tutorialText(G) : null;
+    if (tut) {
+      if (tut !== this.lastTut) {
+        this.lastTut = tut;
+        this.tutEl.replaceChildren(
+          el("div", { class: "tut-step" }, tutorialStep(G)),
+          el("div", { class: "tut-text" }, `👵 ${tut}`),
+        );
+      }
+      this.tutEl.style.display = "block";
+    } else {
+      this.tutEl.style.display = "none";
+      this.lastTut = "";
+    }
+
     // Derived panel during manage/build.
     if (G.phase === "manage" || G.phase === "build") {
       this.derived.style.display = "block";
@@ -212,6 +238,12 @@ export class UI {
     }
     this.lastCombo = G.combo;
     this.lastBumpCombo = G.combo;
+
+    // Pause menu (a flag, not a phase).
+    const showPause = playing && G.paused;
+    if (showPause && !this.pauseShown) this.renderPause(G);
+    this.pauseEl.style.display = showPause ? "flex" : "none";
+    this.pauseShown = showPause;
   }
 
   private updateHud(G: GameState): void {
@@ -313,6 +345,22 @@ export class UI {
     );
   }
 
+  private renderPause(G: GameState): void {
+    this.pauseEl.replaceChildren(
+      el("div", { class: "panel center" },
+        el("h2", {}, "⏸ Paused"),
+        el("div", { class: "small-muted" }, `Night ${G.day} · ${fmtTime(G.dayTime)} left`),
+        el("div", { style: "display:flex; flex-direction:column; gap:10px; align-items:stretch; margin-top:16px; min-width:260px" },
+          btn("▶  Resume", "", () => this.ctrl.togglePause()),
+          el("div", { class: "row" },
+            btn(G.muted ? "🔇 Sound: Off" : "🔊 Sound: On", "ghost small", () => { this.ctrl.toggleMute(); this.renderPause(G); }),
+            btn(G.quality === "high" ? "✨ Graphics: High" : "⚡ Graphics: Low", "ghost small", () => { this.ctrl.toggleQuality(); this.renderPause(G); })),
+          btn("↻  Restart Run", "ghost", () => this.ctrl.play()),
+          btn("Quit to Title", "danger", () => this.ctrl.quitToTitle())),
+      ),
+    );
+  }
+
   private renderDayEnd(G: GameState): void {
     const wage = G.helper.hired ? G.helper.wage : 0;
     this.overlay.append(
@@ -339,11 +387,13 @@ export class UI {
       t.addEventListener("click", () => { G.manageTab = id; this.ctx.sfx.ui(); this.onPhase(G); });
       return t;
     };
-    const nextQuota = QUOTAS[Math.min(G.day, QUOTAS.length - 1)];
+    const up = G.day; // the upcoming night to prep for
+    const quota = QUOTAS[Math.min(up - 1, QUOTAS.length - 1)];
     const header = el("div", { class: "center" },
-      el("h2", {}, `Manager — Day ${G.day} cleared`),
+      el("h2", {}, up === 1 ? "🍳 Welcome to Sizzle Rush!" : `Night ${up - 1} cleared! 🎉`),
+      el("div", { class: "small-muted" }, up === 1 ? "Set up your diner, then open for Night 1." : "Stock up & rearrange before the next rush."),
       el("div", { class: "small-muted" }, "Bank: ", el("span", { class: "coins-chip" }, `$${G.coins}`),
-        `  ·  Next quota: $${nextQuota}`));
+        `  ·  Night ${up} quota: $${quota}`));
 
     let content: El;
     if (G.manageTab === "shop") content = this.shopTab(G);
@@ -357,8 +407,8 @@ export class UI {
           tabBtn("shop", "🛒 Shop"), tabBtn("pricing", "💲 Pricing"), tabBtn("upgrades", "⭐ Upgrades")),
         content,
         el("div", { class: "row", style: "margin-top:20px" },
-          btn("🔧 Floor Plan", "blue", () => this.ctrl.enterBuild()),
-          btn(`Start Day ${G.day + 1}  ▶`, "", () => this.ctrl.startNextShift())),
+          btn("🔧 Decorate & Build", "blue", () => this.ctrl.enterBuild()),
+          btn(`Open Night ${up}  ▶`, "", () => this.ctrl.startNextShift())),
         this.inventoryNote(G),
       ),
     );

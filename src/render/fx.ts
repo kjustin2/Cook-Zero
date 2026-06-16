@@ -163,7 +163,7 @@ export class FxSystem implements Fx {
   }
 
   burst(x: number, z: number, color: number, count: number): void {
-    this.emit(x, z, count, color, { spread: 2.6, up: 1.8, size: 0.3, max: 0.65 });
+    this.emit(x, z, count, color, { spread: 1.7, up: 1.3, size: 0.19, max: 0.48 });
   }
 
   sizzle(x: number, z: number): void {
@@ -225,13 +225,12 @@ export class FxSystem implements Fx {
   }
 
   trail(x: number, z: number): void {
-    for (let i = 0; i < 3; i++) {
-      this.spawn({
-        x: x + (Math.random() - 0.5) * 0.3, y: 0.4 + Math.random() * 0.5, z: z + (Math.random() - 0.5) * 0.3,
-        vx: (Math.random() - 0.5) * 0.6, vy: 0.2, vz: (Math.random() - 0.5) * 0.6,
-        life: 0.34, max: 0.34, size: 0.32, r: 0.6, g: 0.85, b: 1.0, grav: 0.5, drag: 0.9,
-      });
-    }
+    // A single faint puff at the feet — just enough to read the dash.
+    this.spawn({
+      x: x + (Math.random() - 0.5) * 0.25, y: 0.32 + Math.random() * 0.35, z: z + (Math.random() - 0.5) * 0.25,
+      vx: (Math.random() - 0.5) * 0.4, vy: 0.12, vz: (Math.random() - 0.5) * 0.4,
+      life: 0.26, max: 0.26, size: 0.16, r: 0.42, g: 0.52, b: 0.74, grav: 0.4, drag: 0.9,
+    });
   }
 
   ring(x: number, z: number, color: number): void {

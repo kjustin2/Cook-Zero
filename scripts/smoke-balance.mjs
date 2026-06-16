@@ -8,8 +8,7 @@ const fail = await withGame(async ({ page, check }) => {
   const r = await page.evaluate(() => {
     const SR = window.__SR;
     const G = window.__G;
-    SR.ctrl.play();
-    SR.skipStory();
+    SR.quickStart();
     const log = {};
     const cust = (recipe, extra = {}) => ({
       uid: 5000, recipe, kind: "normal", payMult: 1, repMult: 1, spot: 2, x: 0, z: -4.3,

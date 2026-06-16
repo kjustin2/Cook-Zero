@@ -9,31 +9,32 @@ const SAL = "#ff8f6b";
 const ROSA = "#9be7ff";
 
 export const INTRO: Beat[] = [
-  { speaker: "Sal", portrait: "🤵", color: SAL, text: "So you're the one who inherited this greasy little diner. “Sizzle Rush.” Hah." },
-  { speaker: "Sal", portrait: "🤵", color: SAL, text: "Here's the deal, kid: six nights. Hit each night's cash quota, or I shut you down for good." },
-  { speaker: "You", portrait: "🧑‍🍳", color: CHEF, text: "Six nights... I can do this. I just need to cook." },
-  { speaker: "Rosa", portrait: "👵", color: ROSA, text: "Don't mind Sal, sweetie. Grab ingredients, cook 'em just right, and serve folks before they lose patience." },
-  { speaker: "Rosa", portrait: "👵", color: ROSA, text: "Move with WASD, do everything with SPACE, and dash with SHIFT when it gets busy. Now — let's open up!" },
+  { speaker: "Sal", portrait: "🤵", color: SAL, text: "So YOU'RE the sucker who inherited this greasy little spoon. “Sizzle Rush.” *snrk* Cute name." },
+  { speaker: "Sal", portrait: "🤵", color: SAL, text: "Here's the deal, kid: six nights. Hit each night's cash quota — or I bulldoze this place into a parking lot." },
+  { speaker: "You", portrait: "🧑‍🍳", color: CHEF, text: "...Six nights. Watch me. I was BORN to flip patties." },
+  { speaker: "Rosa", portrait: "👵", color: ROSA, text: "Ignore that old grump, sugar. 🧡 Grab your bits, cook 'em just right, and feed folks before they get cranky." },
+  { speaker: "Rosa", portrait: "👵", color: ROSA, text: "Walk with WASD, do everything with SPACE, and SHIFT to dash when it gets hairy. Aprons on — let's COOK!" },
 ];
 
 const DAY3: Beat[] = [
-  { speaker: "Rosa", portrait: "👵", color: ROSA, text: "Word is a famous food critic is dropping by tonight. They tip big — but one slow plate and your reputation tanks." },
-  { speaker: "You", portrait: "🧑‍🍳", color: CHEF, text: "A critic? Then every dish has to be perfect. Let's give them a show." },
+  { speaker: "Rosa", portrait: "👵", color: ROSA, text: "Psst! A big-shot food critic 📸 is sniffin' around tonight. Tips like a king... but one cold plate and your stars take a dive." },
+  { speaker: "You", portrait: "🧑‍🍳", color: CHEF, text: "A critic, huh? Then every plate is a love letter. Let's make 'em weep happy tears. 🥲" },
 ];
 
 const DAY5: Beat[] = [
-  { speaker: "Sal", portrait: "🤵", color: SAL, text: "...Huh. Place is actually packed. Don't let it go to your head — the weekend rush is brutal." },
-  { speaker: "Rosa", portrait: "👵", color: ROSA, text: "Look how far you've come, hon! Decorate that kitchen, hire some help, and ride the wave." },
+  { speaker: "Sal", portrait: "🤵", color: SAL, text: "...Huh. Joint's actually PACKED. Don't get a big head, hotshot — the weekend rush eats rookies for breakfast." },
+  { speaker: "Rosa", portrait: "👵", color: ROSA, text: "Look at you go, hon! 🥹 Tart up that kitchen, hire some hands, and surf this wave all the way home." },
 ];
 
 export const WIN_STORY: Beat[] = [
-  { speaker: "Sal", portrait: "🤵", color: SAL, text: "Six nights. Every quota. I... I don't believe it." },
-  { speaker: "Rosa", portrait: "👵", color: ROSA, text: "Believe it, Sal! This kid turned your sad little diner into the hottest spot in town." },
-  { speaker: "You", portrait: "🧑‍🍳", color: CHEF, text: "Sizzle Rush is here to stay. Order up!" },
+  { speaker: "Sal", portrait: "🤵", color: SAL, text: "Six nights. Every. Single. Quota. I... I think I got somethin' in my eye." },
+  { speaker: "Rosa", portrait: "👵", color: ROSA, text: "Aww, Sal's CRYING! 🥲 This kid turned your sad little spoon into the hottest table in town, you old softie." },
+  { speaker: "You", portrait: "🧑‍🍳", color: CHEF, text: "Sizzle Rush is here to stay. 🔥 Now who's hungry? ORDER UP!" },
 ];
 
 export const LOSE_STORY: Beat[] = [
-  { speaker: "Sal", portrait: "🤵", color: SAL, text: "Quota's quota, kid. Hang up the apron — Sizzle Rush is closed." },
+  { speaker: "Sal", portrait: "🤵", color: SAL, text: "Quota's quota, kid. Hang up the apron. 🪦 Sizzle Rush is... closed." },
+  { speaker: "Rosa", portrait: "👵", color: ROSA, text: "Chin up, sweetie. Every great chef burns a few. Come back and give 'em another sizzle. 🧡" },
 ];
 
 /** Cutscene that plays at the start of a given day, or null. */

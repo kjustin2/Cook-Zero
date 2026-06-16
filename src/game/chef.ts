@@ -82,7 +82,7 @@ export function updateChef(ctx: Ctx, dt: number): void {
     const ds = speed * DASH_MULT;
     chef.vx = chef.dashX * ds;
     chef.vz = chef.dashZ * ds;
-    if (ctx.rng.chance(dt * 55)) ctx.fx.trail(chef.x, chef.z);
+    if (ctx.rng.chance(dt * 18)) ctx.fx.trail(chef.x, chef.z);
   } else {
     chef.vx = damp(chef.vx, nx * speed, 18, dt);
     chef.vz = damp(chef.vz, nz * speed, 18, dt);

@@ -54,7 +54,7 @@ export class SceneView {
   private camera: THREE.PerspectiveCamera;
 
   private itemViews = new Map<number, ItemView>();
-  private slotFood = new Map<string, { group: THREE.Group; sig: string }>();
+  private slotFood = new Map<string, { group: THREE.Group; sig: string; phase: number }>();
   private custViews = new Map<number, CustView>();
   private chef: ChefRig;
   private helper: ChefRig;
@@ -265,6 +265,12 @@ export class SceneView {
           g.add(light);
           v.light = light;
         }
+        // Floating icon over storage/utility stations so they read clearly.
+        if (d && (d.kind === "bin" || d.kind === "trash" || d.kind === "drink")) {
+          const label = makeEmoji(d.icon, 0.8);
+          label.position.set(0, 1.78, 0);
+          g.add(label);
+        }
         this.itemViews.set(it.uid, v);
       }
       const { x, z } = worldOfCell(G.grid, it.col, it.row);
@@ -281,12 +287,16 @@ export class SceneView {
     }
   }
 
-  /** Place an entry at a station's local slot anchor (reuses a scratch vector). */
-  private placeAtSlot(entry: { group: THREE.Group }, view: ItemView | undefined, local: THREE.Vector3 | undefined): void {
+  /** Place an entry at a station's local slot anchor (reuses a scratch vector),
+   *  with a little sizzle bob so cooking food feels alive. */
+  private placeAtSlot(entry: { group: THREE.Group; phase: number }, view: ItemView | undefined, local: THREE.Vector3 | undefined): void {
     if (!view) return;
     this.scratch.copy(local ?? FOOD_ANCHOR);
     view.group.localToWorld(this.scratch);
     entry.group.position.copy(this.scratch);
+    entry.group.position.y += Math.abs(Math.sin(this.time * 7 + entry.phase)) * 0.05;
+    entry.group.rotation.z = Math.sin(this.time * 3.4 + entry.phase) * 0.08;
+    entry.group.rotation.y = Math.sin(this.time * 1.6 + entry.phase) * 0.12;
   }
 
   private syncSlotFood(its: PlacedItem[]): void {
@@ -311,7 +321,7 @@ export class SceneView {
           }
           const g = buildFood(kind, quality);
           this.scene.add(g);
-          entry = { group: g, sig };
+          entry = { group: g, sig, phase: it.uid * 0.9 + i };
           this.slotFood.set(key, entry);
         }
         this.placeAtSlot(entry, view, slots[i]);
@@ -329,7 +339,7 @@ export class SceneView {
           }
           const g = buildPlate(it.plate);
           this.scene.add(g);
-          entry = { group: g, sig };
+          entry = { group: g, sig, phase: it.uid * 0.9 };
           this.slotFood.set(key, entry);
         }
         this.placeAtSlot(entry, view, slots[0]);

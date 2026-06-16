@@ -57,7 +57,7 @@ const START_LAYOUT: Array<[string, number, number]> = [
   ["bin_patty", 3, 4],
   ["bin_cheese", 4, 4],
   ["bin_potato", 5, 4],
-  ["trash", 8, 5],
+  ["trash", 7, 3],
   ["plant", 1, 0],
   ["lamp", 7, 0],
 ];
@@ -117,6 +117,7 @@ export function createState(seed: number): GameState {
     dayCard: null,
     muted: loadMeta().muted,
     quality: loadMeta().quality,
+    tutorial: -1,
   };
 
   recomputeDerived(s);

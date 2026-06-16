@@ -36,7 +36,7 @@ npm start          # = vite build + electron .
 - **Space** — context interact (grab, cook, plate, serve) — the on-screen hint
   shows what Space will do
 - **Shift** — dash (short burst, ~1s cooldown)
-- **P** — pause
+- **P** / **Esc** — pause menu (Resume, Restart, settings, Quit to Title)
 - In the **Floor Plan** (build mode): click to place/pick up, **R** rotate,
   **X** sell, **Esc** done
 

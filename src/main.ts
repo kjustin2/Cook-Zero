@@ -20,9 +20,9 @@ import type { Ctx } from "./game/ctx";
 import { updatePlaying } from "./game/sim";
 import { actionFor } from "./game/interact";
 import { startDash } from "./game/chef";
-import { beginDay, finishDay, prepareManage, computeStars } from "./game/flow";
+import { startDay, finishDay, prepareManage, computeStars } from "./game/flow";
 import { startCutscene, advanceCutscene, skipCutscene, tickCutscene } from "./game/cutscene";
-import { WIN_STORY, LOSE_STORY } from "./game/story";
+import { INTRO, WIN_STORY, LOSE_STORY, storyForDay } from "./game/story";
 import { applyUpgrade } from "./game/upgrades";
 import { TOTAL_DAYS } from "./game/balance";
 import { buildClick, enterBuild, exitBuild, rotateCursor, sellHovered } from "./game/placement";
@@ -56,12 +56,21 @@ if (G.muted) {
 }
 stage.applyQuality(G.quality);
 
-// Pause overlay (toggled outside the menu system).
-const pauseEl = document.createElement("div");
-pauseEl.className = "overlay";
-pauseEl.style.display = "none";
-pauseEl.innerHTML = `<div class="panel center"><h2>Paused</h2><div class="small-muted">Press P to resume</div></div>`;
-uiRoot.append(pauseEl);
+/** Setup hub before a night: shop + rearrange + decorate. */
+function toSetup(): void {
+  prepareManage(ctx);
+  G.phase = "manage";
+}
+
+/** Begin the current night (G.day), playing its cutscene first if any. */
+function beginNight(): void {
+  const beats = G.day > 1 ? storyForDay(G.day) : null; // intro is shown before day 1's setup
+  if (beats) startCutscene(G, beats, () => { startDay(ctx); G.phase = "playing"; }, `Night ${G.day}`);
+  else {
+    startDay(ctx);
+    G.phase = "playing";
+  }
+}
 
 function newRun(): void {
   seed = Math.floor(Math.random() * 1e9);
@@ -70,19 +79,18 @@ function newRun(): void {
   meta.runs += 1;
   saveMeta(meta);
   G.day = 1;
-  beginDay(ctx); // plays the intro cutscene, then opens night 1
+  G.tutorial = meta.tutorialDone ? -1 : 0;
+  // Intro story → then the setup hub so you can decorate before opening night 1.
+  startCutscene(G, INTRO, toSetup, "Night 1");
 }
 
 const controller: GameController = {
   play: () => newRun(),
   toManage: () => {
-    prepareManage(ctx);
-    G.phase = "manage";
+    G.day += 1; // advance to the upcoming night's setup
+    toSetup();
   },
-  startNextShift: () => {
-    G.day += 1;
-    beginDay(ctx);
-  },
+  startNextShift: () => beginNight(),
   enterBuild: () => {
     enterBuild(G);
     G.phase = "build";
@@ -95,6 +103,11 @@ const controller: GameController = {
   },
   togglePause: () => {
     if (G.phase === "playing") G.paused = !G.paused;
+  },
+  quitToTitle: () => {
+    G.paused = false;
+    G.phase = "title";
+    music.stop();
   },
   advanceCutscene: () => advanceCutscene(G),
   skipCutscene: () => skipCutscene(G),
@@ -150,7 +163,7 @@ function handleKeys(): void {
     if (input.pressed("Escape")) skipCutscene(G);
     return;
   }
-  if (input.pressed("KeyP")) controller.togglePause();
+  if (input.pressed("KeyP") || (G.phase === "playing" && input.pressed("Escape"))) controller.togglePause();
   if (G.phase === "playing" && !G.paused && (input.pressed("ShiftLeft") || input.pressed("ShiftRight"))) {
     startDash(ctx);
   }
@@ -189,7 +202,6 @@ function frame(now: number): void {
   stage.update(dt);
   stage.render(dt);
 
-  pauseEl.style.display = G.paused && G.phase === "playing" ? "flex" : "none";
   ui.frame(G);
 
   requestAnimationFrame(frame);
@@ -220,6 +232,7 @@ interface TestApi {
   upgrade: (id: string) => boolean;
   stars: () => number;
   skipStory: () => void;
+  quickStart: () => void;
   advanceCutscene: () => void;
   info: () => { calls: number; tris: number; geometries: number; textures: number; castShadow: boolean; pixelRatio: number; quality: string };
   drawCalls: () => number;
@@ -267,6 +280,16 @@ const api: TestApi = {
   skipStory: () => {
     let guard = 0;
     while (G.phase === "cutscene" && guard++ < 50) skipCutscene(G);
+  },
+  // Start a fresh run and fast-forward through intro + setup into actual play.
+  quickStart: () => {
+    controller.play();
+    let g = 0;
+    while (G.phase !== "playing" && g++ < 30) {
+      if (G.phase === "cutscene") skipCutscene(G);
+      else if (G.phase === "manage") controller.startNextShift();
+      else break;
+    }
   },
   advanceCutscene: () => advanceCutscene(G),
   info: () => ({

@@ -539,6 +539,349 @@ function buildTv(): THREE.Group {
   return g;
 }
 
+function buildLights(): THREE.Group {
+  const g = group();
+  // Thin support bar/wire mounted high across the cell on two little posts.
+  const wireMat = stdMat(0x4a4f57, { rough: 0.6, metal: 0.5 });
+  const barY = 1.7;
+  const postL = box(0.04, 0.5, 0.04, wireMat);
+  postL.position.set(-0.72, barY - 0.25, -0.05);
+  g.add(postL);
+  const postR = box(0.04, 0.5, 0.04, wireMat);
+  postR.position.set(0.72, barY - 0.25, -0.05);
+  g.add(postR);
+
+  // Six warm bulbs strung along a gently-drooping arc (parabolic sag).
+  const bulbMat = stdMat(0xfff3d0, { emissive: 0xffe6a0, emissiveIntensity: 1.1, rough: 0.4 });
+  const n = 6;
+  for (let i = 0; i < n; i++) {
+    const t = i / (n - 1); // 0..1 across the span
+    const x = -0.66 + t * 1.32;
+    const sag = 0.22 * (1 - Math.pow(2 * t - 1, 2)); // droop deepest at center
+    const y = barY - sag;
+    // Short wire segment hanging the bulb just below the cord.
+    const cord = cyl(0.008, 0.008, 0.07, wireMat, 6);
+    cord.position.set(x, y - 0.04, -0.05);
+    g.add(cord);
+    const bulb = sphere(0.06, bulbMat, 10);
+    bulb.position.set(x, y - 0.1, -0.05);
+    g.add(bulb);
+  }
+  return g;
+}
+
+function buildClock(): THREE.Group {
+  const g = group();
+  const mountY = 1.45;
+  // Short back-mount peg holding the clock off the wall.
+  const mount = cyl(0.05, 0.05, 0.12, stdMat(0x4a4f57, { rough: 0.5, metal: 0.4 }), 12);
+  mount.rotation.x = Math.PI / 2;
+  mount.position.set(0, mountY, -0.1);
+  g.add(mount);
+
+  // Dark rim ring + cream face.
+  const rim = cyl(0.42, 0.42, 0.07, stdMat(0x2f3640, { rough: 0.6, metal: 0.2 }), 28);
+  rim.rotation.x = Math.PI / 2;
+  rim.position.set(0, mountY, -0.04);
+  g.add(rim);
+  const face = cyl(0.37, 0.37, 0.04, stdMat(0xe8e2d0, { rough: 0.7 }), 28);
+  face.rotation.x = Math.PI / 2;
+  face.position.set(0, mountY, 0.0);
+  g.add(face);
+
+  // Four tick marks at 12/3/6/9.
+  const tickMat = stdMat(0x2f3640, { rough: 0.6 });
+  for (let i = 0; i < 4; i++) {
+    const a = (i / 4) * Math.PI * 2;
+    const tick = box(0.03, 0.07, 0.02, tickMat);
+    tick.position.set(Math.sin(a) * 0.3, mountY + Math.cos(a) * 0.3, 0.03);
+    g.add(tick);
+  }
+
+  // Two hands (hour shorter, minute longer) + a center hub.
+  const handMat = stdMat(0x33373d, { rough: 0.5 });
+  const hour = box(0.03, 0.18, 0.02, handMat);
+  hour.position.set(0.04, mountY + 0.08, 0.04);
+  hour.rotation.z = -0.5;
+  g.add(hour);
+  const minute = box(0.025, 0.27, 0.02, handMat);
+  minute.position.set(-0.07, mountY + 0.1, 0.04);
+  minute.rotation.z = 0.6;
+  g.add(minute);
+  const hub = sphere(0.04, stdMat(0x2f3640, { rough: 0.4 }), 10);
+  hub.position.set(0, mountY, 0.05);
+  g.add(hub);
+  return g;
+}
+
+function buildCat(): THREE.Group {
+  const g = group();
+  const fur = stdMat(0x9a7b5a, { rough: 0.8, flat: true });
+
+  // Small round cushion to sit on.
+  const cushion = cyl(0.42, 0.46, 0.12, stdMat(0xd56b9c, { rough: 0.85 }), 18);
+  cushion.position.y = 0.06;
+  cushion.scale.y = 0.9;
+  g.add(cushion);
+
+  // Rounded body (squashed sphere) sitting on the cushion.
+  const body = sphere(0.34, fur, 14);
+  body.scale.set(1, 0.95, 0.85);
+  body.position.y = 0.42;
+  g.add(body);
+
+  // Head (sphere) atop the body.
+  const head = sphere(0.27, fur, 14);
+  head.position.set(0, 0.82, 0.05);
+  g.add(head);
+
+  // Two triangle ears via squashed low-poly cones.
+  const earMat = stdMat(0x8a6c4d, { rough: 0.8, flat: true });
+  for (const sx of [-1, 1]) {
+    const ear = cyl(0.0, 0.12, 0.18, earMat, 3);
+    ear.position.set(sx * 0.15, 1.02, 0.03);
+    ear.rotation.z = sx * -0.2;
+    g.add(ear);
+  }
+
+  // Dot eyes + tiny pink nose.
+  const eyeMat = stdMat(0x1a1c20, { rough: 0.3 });
+  for (const sx of [-1, 1]) {
+    const eye = sphere(0.035, eyeMat, 8);
+    eye.position.set(sx * 0.09, 0.86, 0.29);
+    g.add(eye);
+  }
+  const nose = sphere(0.028, stdMat(0xd56b9c, { rough: 0.5 }), 8);
+  nose.position.set(0, 0.79, 0.31);
+  g.add(nose);
+
+  // Tail as a swaying spinner pivoting at the body base (rocks about Z).
+  const spinner = new THREE.Group();
+  spinner.position.set(0.26, 0.36, -0.18);
+  const tail = cyl(0.05, 0.07, 0.5, fur, 10);
+  tail.position.set(0.08, 0.18, 0); // offset so the pivot reads at the base
+  tail.rotation.z = -0.6;
+  spinner.add(tail);
+  g.add(spinner);
+  markSpin(g, spinner, "z");
+  return g;
+}
+
+function buildBalloons(): THREE.Group {
+  const g = group();
+  // Small floor weight anchoring the strings.
+  const weight = cyl(0.16, 0.2, 0.16, stdMat(0x6f767e, { rough: 0.4, metal: 0.6 }), 16);
+  weight.position.y = 0.08;
+  g.add(weight);
+
+  const colors = [0xff7fb0, 0x6fb6ff, 0xffd95d];
+  const offs: Array<[number, number]> = [
+    [-0.22, 0.04],
+    [0.0, -0.06],
+    [0.22, 0.05],
+  ];
+  const strMat = stdMat(0xdddddd, { rough: 0.7 });
+  for (let i = 0; i < 3; i++) {
+    const [ox, oz] = offs[i];
+    const by = 1.35 + (i % 2) * 0.12;
+    // Thin string from weight up to the knot.
+    const str = cyl(0.006, 0.006, by - 0.16, strMat, 6);
+    str.position.set(ox * 0.5, 0.16 + (by - 0.16) / 2, oz * 0.5);
+    str.rotation.z = -ox * 0.4;
+    g.add(str);
+    // Glossy slightly-squashed balloon.
+    const balloon = sphere(0.18, stdMat(colors[i], { rough: 0.18, metal: 0.1 }), 14);
+    balloon.scale.set(1, 1.18, 1);
+    balloon.position.set(ox, by, oz);
+    g.add(balloon);
+    // Tiny knot at the bottom.
+    const knot = cyl(0.0, 0.04, 0.05, stdMat(colors[i], { rough: 0.3 }), 8);
+    knot.position.set(ox, by - 0.21, oz);
+    g.add(knot);
+  }
+  return g;
+}
+
+function buildJukebox(): THREE.Group {
+  const g = group();
+  const red = stdMat(0xc23a3a, { rough: 0.45, metal: 0.15 });
+  // Rounded cabinet body.
+  const body = box(0.9, 1.2, 0.5, red);
+  body.position.y = 0.6;
+  g.add(body);
+  // Slightly inset lower base.
+  const base = box(0.96, 0.18, 0.56, stdMat(0x8a2a2a, { rough: 0.5 }));
+  base.position.y = 0.09;
+  g.add(base);
+
+  // Glowing arched top (half-cylinder) with warm emissive.
+  const archMat = stdMat(0xffd98a, { emissive: 0xffb060, emissiveIntensity: 1.1, rough: 0.4 });
+  const arch = cyl(0.45, 0.45, 0.5, archMat, 18);
+  arch.rotation.x = Math.PI / 2;
+  arch.position.set(0, 1.2, 0);
+  g.add(arch);
+
+  // Chrome trim ring around the arch front.
+  const trim = new THREE.Mesh(
+    new THREE.TorusGeometry(0.46, 0.03, 8, 22),
+    stdMat(0xd2d6db, { rough: 0.25, metal: 0.85 }),
+  );
+  trim.position.set(0, 1.2, 0.26);
+  g.add(trim);
+
+  // Speaker grille (dark slatted panel) on the lower front.
+  const grille = box(0.6, 0.4, 0.04, stdMat(0x2a2024, { rough: 0.8 }));
+  grille.position.set(0, 0.5, 0.26);
+  g.add(grille);
+
+  // Two glowing buttons.
+  const btnColors = [0x5dff9b, 0x5dd6ff];
+  for (let i = 0; i < 2; i++) {
+    const btn = cyl(0.05, 0.05, 0.04, stdMat(btnColors[i], { emissive: btnColors[i], emissiveIntensity: 1.4, rough: 0.3 }), 12);
+    btn.rotation.x = Math.PI / 2;
+    btn.position.set(-0.15 + i * 0.3, 0.9, 0.26);
+    g.add(btn);
+  }
+  return g;
+}
+
+function buildPoster(): THREE.Group {
+  const g = group();
+  const frameMat = stdMat(0x6a8cff, { rough: 0.5, metal: 0.1 });
+  const fw = 0.96;
+  const fh = 1.2;
+  const t = 0.07;
+  const cy = 1.2;
+
+  // Thin back-post so it mounts higher like a wall item.
+  const post = box(0.1, 1.2, 0.06, frameMat);
+  post.position.set(0, 0.6, -0.05);
+  g.add(post);
+
+  // Frame border = four boxes.
+  const top = box(fw, t, 0.06, frameMat);
+  top.position.set(0, cy + fh / 2, 0);
+  const bot = box(fw, t, 0.06, frameMat);
+  bot.position.set(0, cy - fh / 2, 0);
+  const left = box(t, fh, 0.06, frameMat);
+  left.position.set(-fw / 2 + t / 2, cy, 0);
+  const right = box(t, fh, 0.06, frameMat);
+  right.position.set(fw / 2 - t / 2, cy, 0);
+  g.add(top, bot, left, right);
+
+  // Bold band poster: bright background + a star + musical notes.
+  const tex = canvasTex(256, (ctx, s) => {
+    ctx.fillStyle = "#ffe27a";
+    ctx.fillRect(0, 0, s, s);
+    ctx.fillStyle = "#ff5d8f";
+    ctx.fillRect(0, 0, s, s * 0.22);
+    ctx.fillStyle = "#9b6bff";
+    // A bold 5-point star.
+    ctx.beginPath();
+    const cx = s * 0.5;
+    const cyy = s * 0.42;
+    const R = s * 0.26;
+    const r2 = s * 0.11;
+    for (let i = 0; i < 10; i++) {
+      const a = (i / 10) * Math.PI * 2 - Math.PI / 2;
+      const rr = i % 2 === 0 ? R : r2;
+      const px = cx + Math.cos(a) * rr;
+      const py = cyy + Math.sin(a) * rr;
+      if (i === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+    ctx.fill();
+    // Two musical notes (filled circles + stems) at the bottom.
+    ctx.fillStyle = "#2f3640";
+    for (const nx of [0.32, 0.6]) {
+      ctx.beginPath();
+      ctx.arc(s * nx, s * 0.82, s * 0.05, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillRect(s * nx + s * 0.04, s * 0.66, s * 0.02, s * 0.16);
+    }
+  });
+  const canvas = new THREE.Mesh(
+    new THREE.PlaneGeometry(fw - t * 2, fh - t * 2),
+    new THREE.MeshStandardMaterial({ map: tex, roughness: 0.85 }),
+  );
+  canvas.position.set(0, cy, 0.02);
+  g.add(canvas);
+  return g;
+}
+
+function buildBookshelf(): THREE.Group {
+  const g = group();
+  const wood = stdMat(0x7a5230, { rough: 0.85, metal: 0.02 });
+  // Outer frame: back panel + sides + bottom + middle/top shelves.
+  const back = box(1.0, 1.1, 0.05, wood);
+  back.position.set(0, 0.6, -0.18);
+  g.add(back);
+  for (const sx of [-1, 1]) {
+    const side = box(0.06, 1.1, 0.4, wood);
+    side.position.set(sx * 0.5, 0.6, -0.02);
+    g.add(side);
+  }
+  const shelfYs = [0.08, 0.62, 1.14];
+  for (const sy of shelfYs) {
+    const shelf = box(1.0, 0.06, 0.4, wood);
+    shelf.position.set(0, sy, -0.02);
+    g.add(shelf);
+  }
+
+  // Two rows of colorful book spines (thin upright boxes).
+  const spineColors = [0xff7f6e, 0xf2c879, 0x6fb6ff, 0x9b6bd5, 0x5dff9b, 0xff5d8f];
+  for (let row = 0; row < 2; row++) {
+    const rowY = 0.4 + row * 0.54;
+    for (let i = 0; i < 6; i++) {
+      const c = spineColors[(i + row * 3) % spineColors.length];
+      const bh = 0.4 + ((i + row) % 3) * 0.04;
+      const spine = box(0.1, bh, 0.26, stdMat(c, { rough: 0.7 }));
+      spine.position.set(-0.4 + i * 0.16, rowY + bh / 2 - 0.22, 0.0);
+      spine.rotation.z = i === 5 ? 0.18 : 0; // last one leaning, cozy
+      g.add(spine);
+    }
+  }
+
+  // Tiny potted plant on top.
+  const pot = cyl(0.1, 0.08, 0.12, stdMat(0xb5613a, { rough: 0.9 }), 12);
+  pot.position.set(0.32, 1.23, 0);
+  g.add(pot);
+  const leaf = new THREE.Mesh(
+    new THREE.IcosahedronGeometry(0.14, 0),
+    stdMat(0x4f9d52, { rough: 0.8, flat: true }),
+  );
+  leaf.position.set(0.32, 1.36, 0);
+  leaf.scale.y = 0.8;
+  g.add(leaf);
+  return g;
+}
+
+function buildCandle(): THREE.Group {
+  const g = group();
+  // Small dish.
+  const dish = cyl(0.24, 0.26, 0.05, stdMat(0xc6d3dc, { rough: 0.3, metal: 0.7 }), 18);
+  dish.position.y = 0.025;
+  g.add(dish);
+
+  // Cream wax pillar.
+  const wax = cyl(0.15, 0.16, 0.5, stdMat(0xf2ead4, { rough: 0.6 }), 18);
+  wax.position.y = 0.3;
+  g.add(wax);
+
+  // Tiny wick.
+  const wick = cyl(0.012, 0.012, 0.05, stdMat(0x33373d, { rough: 0.6 }), 6);
+  wick.position.y = 0.57;
+  g.add(wick);
+
+  // Glowing teardrop flame (cone) that blooms bright.
+  const flameMat = stdMat(0xffd98a, { emissive: 0xffb060, emissiveIntensity: 1.4, rough: 0.4 });
+  const flame = cyl(0.0, 0.06, 0.16, flameMat, 12);
+  flame.position.y = 0.66;
+  g.add(flame);
+  return g;
+}
+
 // --- public API --------------------------------------------------------------
 
 export function buildDecor(defId: string): THREE.Group {
@@ -569,6 +912,22 @@ export function buildDecor(defId: string): THREE.Group {
       return buildAquarium();
     case "tv":
       return buildTv();
+    case "lights":
+      return buildLights();
+    case "clock":
+      return buildClock();
+    case "cat":
+      return buildCat();
+    case "balloons":
+      return buildBalloons();
+    case "jukebox":
+      return buildJukebox();
+    case "poster":
+      return buildPoster();
+    case "bookshelf":
+      return buildBookshelf();
+    case "candle":
+      return buildCandle();
     default: {
       // Unknown id → small gray box placeholder (kept well within one cell).
       const ph = box(0.5, 0.5, 0.5, stdMat(0x888888, { rough: 0.8 }));

@@ -8,6 +8,7 @@ import { QUOTAS, SHIFT_LEN, TOTAL_DAYS } from "./balance";
 import { items } from "./grid";
 import { clearSlot } from "./cooking";
 import { recomputeDerived } from "./adjacency";
+import { RECIPES } from "./catalog";
 import { rollModifier } from "./modifiers";
 import { rollShop } from "./shop";
 import { rollUpgrades } from "./upgrades";
@@ -41,7 +42,11 @@ export function startDay(ctx: Ctx): void {
   recomputeDerived(s);
   ctx.music.start();
   ctx.music.setIntensity(0);
-  if (s.modifier) {
+  // Announce newly-unlocked dishes (or the day's modifier if none).
+  const newDishes = RECIPES.filter((r) => r.minDay === s.day);
+  if (s.day > 1 && newDishes.length) {
+    s.toast = { text: `🆕 New dish: ${newDishes.map((r) => `${r.icon} ${r.name}`).join(", ")}!`, t: 0 };
+  } else if (s.modifier) {
     s.toast = { text: `${s.modifier.icon} ${s.modifier.name} — ${s.modifier.desc}`, t: 0 };
   }
 }

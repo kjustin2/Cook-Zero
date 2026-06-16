@@ -8,8 +8,7 @@ const fail = await withGame(async ({ page, check }) => {
   // A busy scene: full counter, both stations cooking, helper hired.
   await page.evaluate(() => {
     const SR = window.__SR, G = window.__G;
-    SR.ctrl.play();
-    SR.skipStory();
+    SR.quickStart();
     G.coins = 300;
     SR.hire();
     const go = (c, r) => { const w = SR.cellWorld(c, r); G.chef.x = w.x; G.chef.z = w.z; };

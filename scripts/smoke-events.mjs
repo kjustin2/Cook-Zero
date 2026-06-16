@@ -7,8 +7,7 @@ const fail = await withGame(async ({ page, check }) => {
   const r = await page.evaluate(() => {
     const SR = window.__SR;
     const G = window.__G;
-    SR.ctrl.play();
-    SR.skipStory();
+    SR.quickStart();
 
     const KIND = {
       normal: { pay: 1, rep: 1 },

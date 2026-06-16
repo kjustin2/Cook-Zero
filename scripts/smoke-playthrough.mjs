@@ -82,7 +82,7 @@ const fail = await withGame(async ({ page, check }) => {
         builtOnce = true;
         await exerciseBuild();
       }
-      await clickText(/Start Day/);
+      await clickText(/Open Night/);
     } else if (p === "build") {
       await clickText(/Done/);
     }
@@ -94,9 +94,10 @@ const fail = await withGame(async ({ page, check }) => {
   check("win screen shows KITCHEN LEGEND", winText);
   await page.screenshot({ path: "shots/8-win.png" });
 
-  // Death path: play again (skip intro), then fail day 1's quota.
+  // Death path: play again (intro → setup → open), then fail night 1's quota.
   await clickText(/Play Again/);
   await page.evaluate(() => window.__SR.skipStory());
+  await clickText(/Open Night/);
   check("Play Again restarts the run", (await phase()) === "playing", `phase=${await phase()}`);
   await forceEndShift(false);
   await page.evaluate(() => window.__SR.skipStory());

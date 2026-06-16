@@ -35,10 +35,17 @@ tile grid where **placement & adjacency drive gameplay bonuses**.
 
 **Phase machine (`src/main.ts`):**
 ```
-title → cutscene(intro) → playing → dayEnd → manage ⇄ build → [cutscene] → playing …
-        → cutscene(ending) → win (day 6 cleared)
-        → cutscene(closed) → gameOver (quota missed)
+title → cutscene(intro) → manage[setup] ⇄ build → [cutscene(night)] → playing →
+        dayEnd → manage[next night] ⇄ build → … →
+        cutscene(ending) → win | cutscene(closed) → gameOver
 ```
+You get the **manage hub (shop/pricing/upgrades + Decorate & Build) before EVERY
+night, including night 1** (`toSetup`); "Open Night N" → `beginNight` plays that
+night's cutscene then `startDay`. `controller.toManage` increments `G.day` so the
+hub preps the *upcoming* night. A first-run **tutorial** (`game/tutorial.ts`,
+gated by `meta.tutorialDone`) guides the first burger. **Escape** opens a pause
+menu (Resume/Restart/settings/Quit). Placed decor is **solid** (collision); bins
+show a floating icon. Tests reach play via `__SR.quickStart()`.
 A light diner-rescue story plays in cutscenes (`game/story.ts` data, `game/cutscene.ts`
 controller): an intro on New Game, beats before nights 3 & 5, and a win/lose ending. A
 "Night N — theme" title card (`G.dayCard`) opens each shift. The menu shows a career

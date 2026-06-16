@@ -101,7 +101,7 @@ export function actionFor(ctx: Ctx): Action | null {
           run: () => {
             G.carry = { kind: "ing", id: ing };
             ctx.sfx.grab();
-            ctx.fx.burst(x, z, d.color, 5);
+            ctx.fx.burst(x, z, d.color, 3);
           },
         }));
       }
