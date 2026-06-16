@@ -26,9 +26,10 @@ must be used (prefix intentionally-unused params with `_`).
 ## What the game is
 
 A real-time **3D** arcade kitchen roguelite (Three.js). The player controls a
-chef (WASD + Space) inside a restaurant: customers walk in, queue at the counter
-with orders, and the chef grabs ingredients from bins, cooks on grill/fryer/soda
-stations, assembles plates on prep counters, and serves across the counter. Runs
+chef (WASD + Space) inside a restaurant: customers walk in and **seat themselves
+at dining tables** with orders, and the chef grabs ingredients from bins, cooks
+on grill/fryer/soda stations, assembles plates on prep counters, then **leaves
+the kitchen** (through a gap in the front counter) to **serve at the table**. Runs
 are **6 shifts** of 120s with a cash quota. Between shifts the player shops,
 picks an upgrade, sets pricing, and **rearranges/decorates the kitchen** on a
 tile grid where **placement & adjacency drive gameplay bonuses**.
@@ -65,7 +66,7 @@ never imports Three.js and runs headless in tests.
 | Data | `game/catalog.ts` | `RECIPES`, `CATALOG` (stations + decor with adjacency/global bonuses), cook rules |
 | Grid | `game/grid.ts` | tile model, cell↔world coords, front-of-house weighting |
 | Adjacency | `game/adjacency.ts` | recomputes per-station cook bonuses + global `derived` knobs |
-| Sim | `game/{cooking,interact,chef,customers,serving,helper,sim}.ts` | the playing-state systems (chef.ts also holds `startDash`) |
+| Sim | `game/{cooking,interact,chef,customers,serving,helper,sim,dining}.ts` | the playing-state systems (chef.ts also holds `startDash`; `dining.ts` = table-service geometry: `TABLES`, the counter gap, static collision `BARRIERS`, `ENTRANCE`/`EXIT`, `SERVE_REACH`) |
 | Meta | `game/{upgrades,shop,placement,flow,modifiers,story,cutscene}.ts` | upgrades, shop, build mode, day transitions, modifiers, story content, cutscene controller |
 | Render | `render/{stage,sceneView,kit,fx}.ts` + `render/{food,stations,decor,actors}.ts` | Three.js renderer/post (IBL env map + time-of-day), scene sync, FX, procedural meshes |
 | Audio | `audio/{sfx,music}.ts` | procedural WebAudio SFX + music (intensity follows combo) |
@@ -85,6 +86,9 @@ combo HUD bump — re-triggered via the `void el.offsetWidth` reflow trick.
 - **The floor plan is the kitchen.** Stations + decor occupy a `GRID_COLS×GRID_ROWS`
   grid (`balance.ts`); the chef roams continuously and collides with solid cells.
   Row 0 is nearest the counter (front of house); decor up front is worth more vibe.
+  The chef also collides with the static dining `BARRIERS` (two counter segments +
+  the tables, `dining.ts`) and may cross the central counter gap onto the dining
+  floor to serve; bounds run from `DINING_MIN_Z` (front) to the back of the kitchen.
 - **Adjacency is the heart of decoration.** `recomputeDerived()` must be called
   after any layout/pricing/reputation change. It sets each cook station's
   `effCookSpeed`/`effSlots` from neighbouring decor and fills `G.derived`
@@ -96,9 +100,14 @@ combo HUD bump — re-triggered via the `void el.offsetWidth` reflow trick.
 - **Cook timing** per slot, baked at placement using the station's adjacency
   speed: cooking `[0,cookT)` → perfect `[cookT,perfT)` → overdone `[perfT,burnT)`
   → burnt (grills only; fryers/soda never burn).
+- **Cooking feel:** slot food animates by kind in `sceneView` — grill patties
+  periodically somersault-**flip**, fries **shimmy**, and every item/plate part
+  **pops** (squash-stretch) when placed. The chef plays a chop/flip arm-pump
+  driven by a `chef.cookT` pulse set in `interact.ts` when cooking/pouring/plating.
 - **Interactions** live in `interact.ts` `actionFor()` — returns `{label,run}` for
-  the nearest interactable; the label is the SPACE hint. Serving is a special
-  counter case (chef near the counter + aligned with a waiting customer).
+  the nearest interactable; the label is the SPACE hint. Serving is **proximity
+  table service**: the chef must walk up to a seated guest within `SERVE_REACH`
+  (`dining.ts`); an out-of-reach plate offers no serve.
 - **Business layer:** `priceLevel` (PRICE_LEVELS) trades coins for patience/crowd;
   `rep` (0–100) scales `spawnMult`; the hired `helper` tends grills so they don't
   burn (and holds the perfect sear at higher levels), wage paid at day end.
@@ -139,14 +148,16 @@ combo HUD bump — re-triggered via the `void el.offsetWidth` reflow trick.
 
 - Smoke tests (`scripts/smoke-*.mjs`) use the shared `_harness.mjs` (auto-finds
   cached Chromium via `_chrome.mjs`). `npm test` (`run-smokes.mjs`) boots one dev
-  server and runs all 13 suites against it. Cutscenes interrupt `play()` now, so
+  server and runs all 15 suites against it. Cutscenes interrupt `play()` now, so
   logic tests call `__SR.skipStory()` after `play()` to reach `playing`; real-DOM
   tests click the cutscene **Skip** button. Two complementary styles, both
   Playwright headless:
-  - **Logic probes** (`boot/story/adjacency/economy/cook/events/systems/balance/perf`) drive
-    `window.__SR` directly (`tick`, `interact`, `place`, `buy`, `sell`, `upgrade`,
-    `stars`, …) for deterministic assertions on cooking, scoring, adjacency, burns,
-    build, upgrades, pricing payout, recipe gating, plate matching, star tiers, etc.
+  - **Logic probes** (`boot/story/adjacency/economy/cook/tables/events/systems/
+    balance/features/perf/flow`) drive `window.__SR` directly (`tick`, `interact`,
+    `place`, `buy`, `sell`, `upgrade`, `stars`, …) for deterministic assertions on
+    cooking, scoring, adjacency, burns, build, upgrades, pricing payout, recipe
+    gating, plate matching, star tiers, and **table service** (walk-in → seat →
+    proximity serve, incl. the out-of-reach negative).
   - **RH3-style real play** (`input/playthrough/soak`) drive the REAL game through
     real keyboard/mouse + DOM clicks: `playthrough` navigates the whole run to the
     win + game-over screens, `input` exercises WASD/Shift/Space/P + mouse build
