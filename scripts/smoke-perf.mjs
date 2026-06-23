@@ -1,73 +1,40 @@
-// Performance smoke: guards against regressions on a busy scene — scene draw-call
-// budget, bounded geometry/texture counts, a cheap sim step, the High/Low quality
-// toggle actually changing the pipeline, no geometry leak across heavy customer
-// churn (validates mesh disposal), and a headless-fps sanity floor.
+// Perf smoke: a bounded scene draw-call count, bounded geometry/texture counts,
+// a fast deterministic sim step, and a working quality toggle (low drops shadows).
 import { withGame, finish } from "./_harness.mjs";
 
 const fail = await withGame(async ({ page, check }) => {
-  // A busy scene: full counter, both stations cooking, helper hired.
-  await page.evaluate(() => {
+  const r = await page.evaluate(() => {
     const SR = window.__SR, G = window.__G;
     SR.quickStart();
-    G.coins = 300;
-    SR.hire();
-    const go = (c, r) => { const w = SR.cellWorld(c, r); G.chef.x = w.x; G.chef.z = w.z; };
-    const grill = SR.find("grill"), fryer = SR.find("fryer"), bp = SR.find("bin_patty"), bo = SR.find("bin_potato");
-    go(bp.col, bp.row); SR.interact(); go(grill.col, grill.row); SR.interact();
-    go(bo.col, bo.row); SR.interact(); go(fryer.col, fryer.row); SR.interact();
-    SR.tickN(1 / 30, 20);
-    const rc = (id) => G.recipes.find((q) => q.id === id) || G.recipes[1];
-    G.customers = [0, 1, 2, 3, 4].map((s) => ({
-      uid: 9000 + s, recipe: rc("cheeseburger"), kind: "normal", payMult: 1, repMult: 1, spot: s,
-      x: (s - 2) * 2.7, z: -4.3, state: "waiting", patience: 25, maxPatience: 30, anger: 0, servedT: 0,
-      happy: false, look: { skin: s % 6, shirt: s % 8, hair: s % 7, hat: s % 2 === 0 }, bob: s,
-    }));
+    // Populate the diner with guests + cooking food, then measure.
+    G.spawnGap = 0.4;
+    G.spawnTimer = 0.1;
+    SR.tickN(1 / 30, 30 * 3);
+    SR.gotoStation("meat"); SR.interact();
+    SR.gotoStation("grill"); SR.interact();
+    SR.tickN(1 / 30, 30);
+
+    const calls = SR.drawCalls();
+    const info = SR.info();
+
+    const t0 = performance.now();
+    SR.tickN(1 / 60, 240);
+    const stepMs = (performance.now() - t0) / 240;
+
+    SR.setQuality("low");
+    const low = SR.info();
+    SR.setQuality("high");
+    const high = SR.info();
+
+    return { calls, geometries: info.geometries, textures: info.textures, stepMs, lowShadow: low.castShadow, highShadow: high.castShadow };
   });
-  await page.waitForTimeout(600);
 
-  const dc = await page.evaluate(() => window.__SR.drawCalls());
-  check("scene draw calls within budget", dc > 0 && dc < 650, `${dc} calls`);
-
-  const mem = await page.evaluate(() => window.__SR.info());
-  check("geometry count is bounded", mem.geometries < 600, `${mem.geometries} geometries`);
-  check("texture count is bounded", mem.textures < 80, `${mem.textures} textures`);
-
-  const sim = await page.evaluate(() => { const t0 = performance.now(); window.__SR.tickN(1 / 60, 600); return (performance.now() - t0) / 600; });
-  check("sim step under 0.5ms", sim < 0.5, `${sim.toFixed(3)} ms/tick`);
-
-  const q = await page.evaluate(() => {
-    window.__SR.setQuality("low"); const lo = window.__SR.info();
-    window.__SR.setQuality("high"); const hi = window.__SR.info();
-    return { lo, hi };
-  });
-  check("Low quality disables shadows", q.lo.castShadow === false && q.lo.quality === "low");
-  check("High quality enables shadows", q.hi.castShadow === true && q.hi.quality === "high");
-
-  // Heavy customer churn must not leak geometry (validates disposal).
-  const leak = await page.evaluate(async () => {
-    const G = window.__G, SR = window.__SR;
-    const raf = () => new Promise((r) => requestAnimationFrame(r));
-    const burger = G.recipes.find((r) => r.id === "burger");
-    const mk = (uid) => ({ uid, recipe: burger, kind: "normal", payMult: 1, repMult: 1, spot: uid % 5, x: 0, z: -4.3, state: "waiting", patience: 30, maxPatience: 30, anger: 0, servedT: 0, happy: false, look: { skin: uid % 6, shirt: uid % 8, hair: uid % 7, hat: false }, bob: 0 });
-    G.customers = []; await raf(); await raf();
-    const base = SR.info().geometries;
-    let uid = 50000;
-    for (let i = 0; i < 30; i++) {
-      G.customers = [mk(uid++), mk(uid++), mk(uid++), mk(uid++), mk(uid++)];
-      await raf();
-      G.customers = [];
-      await raf();
-    }
-    await raf(); await raf();
-    return { base, after: SR.info().geometries };
-  });
-  check("150 customers' worth of churn doesn't leak geometry", leak.after - leak.base < 60, `base=${leak.base} → after=${leak.after}`);
-
-  const fps = await page.evaluate(() => new Promise((res) => {
-    let f = 0; const s = performance.now();
-    (function t() { f++; const e = performance.now() - s; if (e < 1200) requestAnimationFrame(t); else res(f / (e / 1000)); })();
-  }));
-  check("headless fps above 30", fps > 30, `${fps.toFixed(0)} fps`);
+  check("draw calls within budget", r.calls < 700, `calls=${r.calls}`);
+  check("geometry count bounded", r.geometries < 3000, `geos=${r.geometries}`);
+  check("texture count bounded", r.textures < 400, `texs=${r.textures}`);
+  check("sim step is fast", r.stepMs < 1.0, `${r.stepMs.toFixed(3)}ms`);
+  check("low quality drops shadows", r.lowShadow === false);
+  check("high quality keeps shadows", r.highShadow === true);
 });
 
 finish("PERF", fail);

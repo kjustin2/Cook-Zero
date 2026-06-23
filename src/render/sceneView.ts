@@ -1,827 +1,626 @@
-// The scene assembler: builds the static restaurant (floor, counter, walls),
-// then every frame syncs Three.js objects to the game state — placed stations &
-// decor, food on slots, assembled plates, the chef + helper, customers and their
-// order bubbles, floating text, and the build-mode cursor/ghost.
+// One-way render sync: read G each frame and build/update/dispose Three.js
+// objects to match. Render never mutates gameplay. Covers the diner room, tables,
+// stations + signs, the chef, the customers (with floating order bubbles), the
+// live cooking food, the carried item, the pet, the garden, treat decor, the
+// wayfinder beacon, and the cinematic figure cast. The room/tables/stations/chef/
+// pet are rebuilt when the player's RestaurantConfig (colours, layout, looks)
+// changes, so customization + layout edits + a restored save all just appear.
 
 import * as THREE from "three";
-import type { GameState, Carry, CookSlot, IngredientId, PlacedItem, PlatePart } from "../game/types";
-import type { Input } from "../core/input";
-import { def, RECIPES } from "../game/catalog";
-import { items, worldOfCell, cellOfWorld, TILE, COUNTER_Z, CUSTOMER_Z } from "../game/grid";
-import { GAP_HALF, HALF_W, DINING_COLS, tableWorld, diningColOf, inDiningZone } from "../game/dining";
-import { pullQuality } from "../game/cooking";
-import { Stage } from "./stage";
+import type { Carry, Customer, GameState, Station, StationId } from "../game/types";
+import type { Stage } from "./stage";
+import { activeStationIds, food, stationDef } from "../game/catalog";
+import { currentShot, shotProgress } from "../game/cutscene";
+import { buildDinerRoom, buildTable, buildBalloons, buildWallClock, buildRug, buildFlame } from "./diner";
 import { buildStation } from "./stations";
-import { buildDecor } from "./decor";
-import { buildFood, buildPlate, buildCookingPatty, buildCookingFries, type FoodKind } from "./food";
 import { buildChef, buildCustomer, type ChefRig, type CustomerRig } from "./actors";
-import { stdMat, box, cyl, sphere, group, canvasTex, disposeTree } from "./kit";
-import { clamp, damp, easeOutBack } from "../core/math";
+import { buildCarryMesh, buildCookingFood, tintCooking } from "./food";
+import { buildPet, type PetRig } from "./pets";
+import { buildPlant } from "./plants";
+import { Figures } from "./figures";
+import { canvasTex, disposeTree, emojiSprite, roundRect } from "./kit";
+import { easeInOut } from "../core/math";
 
-/** Dispose only geometries in a subtree (leaves materials alone — used for actor
- *  rigs that share module-level eye/glint materials across instances). */
-function disposeGeom(obj: THREE.Object3D): void {
-  obj.traverse((o) => {
-    const m = o as THREE.Mesh;
-    if (m.geometry) m.geometry.dispose();
+/** A floating sign badge (rounded card + emoji) so a kid instantly knows what a
+ *  station does and which order it matches. */
+function signSprite(icon: string, borderHex: number): THREE.Sprite {
+  const border = "#" + borderHex.toString(16).padStart(6, "0");
+  const tex = canvasTex(128, (ctx, s) => {
+    ctx.clearRect(0, 0, s, s);
+    roundRect(ctx, 10, 14, s - 20, s - 34, 24);
+    ctx.fillStyle = "rgba(255,255,255,0.96)";
+    ctx.fill();
+    ctx.lineWidth = 9;
+    ctx.strokeStyle = border;
+    ctx.stroke();
+    ctx.font = `${Math.floor(s * 0.52)}px serif`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(icon, s / 2, s / 2 - 1);
   });
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false }));
+  sp.scale.set(1.3, 1.3, 1);
+  return sp;
 }
 
-/** A cute round dining table with two cushioned stools (origin at its base). */
-function buildTableMesh(): THREE.Group {
-  const woodMat = stdMat(0x9c5a2e, { rough: 0.6 });
-  const t = group();
-  const topT = cyl(0.72, 0.72, 0.12, stdMat(0xcf8f55, { rough: 0.45 }), 18);
-  topT.position.y = 0.92;
-  const ped = cyl(0.13, 0.18, 0.9, woodMat, 10);
-  ped.position.y = 0.46;
-  const base = cyl(0.42, 0.42, 0.08, woodMat, 14);
-  base.position.y = 0.04;
-  t.add(topT, ped, base);
-  const cushMat = stdMat(0xff8fae, { rough: 0.7 });
-  for (const sz of [0.98, -0.98]) {
-    const seat = cyl(0.26, 0.26, 0.12, cushMat, 12);
-    seat.position.set(0, 0.5, sz);
-    const leg = cyl(0.05, 0.07, 0.5, woodMat, 8);
-    leg.position.set(0, 0.22, sz);
-    t.add(seat, leg);
-  }
-  return t;
-}
+const COOK_PULSE = 0.42;
 
-const FOOD_ANCHOR = new THREE.Vector3(0, 1.1, 0); // fallback slot height
-
-const ING_FOOD: Partial<Record<IngredientId, FoodKind>> = {
-  bun: "bun",
-  patty_raw: "patty_raw",
-  cheese: "cheese",
-  lettuce: "lettuce",
-  tomato: "tomato",
-};
-
-interface ItemView {
-  group: THREE.Group;
-  defId: string;
-  light?: THREE.PointLight;
-}
-/** How a piece of food on a slot moves: patties somersault-flip on the grill,
- *  fries shimmy in the fryer, everything else does a gentle living bob. */
-type SlotMotion = "flip" | "shake" | "bob";
-interface SlotEntry {
-  group: THREE.Group;
-  sig: string;
-  phase: number;
-  motion: SlotMotion;
-  bornTime: number; // this.time when (re)built — drives the placement pop
-  cook?: "patty" | "fries"; // live-cooking item: tint its materials each frame
-}
 interface CustView {
   rig: CustomerRig;
   bubble: THREE.Group;
-  bar: THREE.Mesh;
-  icon: THREE.Sprite;
-  ring?: THREE.Mesh; // special-customer floor ring (kept grounded, not parented to the rig)
-  shownT: number; // bubble pop-in age
+  barFill: THREE.Mesh;
+  prevX: number;
+  prevZ: number;
+  face: number;
 }
 
+interface SlotView {
+  mesh: THREE.Group;
+  food: string;
+}
+
+function bubbleBgTex(): THREE.CanvasTexture {
+  return canvasTex(128, (ctx, s) => {
+    ctx.clearRect(0, 0, s, s);
+    ctx.fillStyle = "rgba(255,255,255,0.95)";
+    ctx.beginPath();
+    ctx.arc(s / 2, s / 2, s / 2 - 6, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.lineWidth = 7;
+    ctx.strokeStyle = "#ff9ec7";
+    ctx.stroke();
+  });
+}
+
+function iconTex(icon: string): THREE.CanvasTexture {
+  return canvasTex(96, (ctx, s) => {
+    ctx.clearRect(0, 0, s, s);
+    ctx.font = `${Math.floor(s * 0.8)}px serif`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(icon, s / 2, s / 2 + s * 0.04);
+  });
+}
+
+const sig = (o: unknown): string => JSON.stringify(o);
+
 export class SceneView {
-  private scene: THREE.Scene;
-  private camera: THREE.PerspectiveCamera;
-
-  private itemViews = new Map<number, ItemView>();
-  private slotFood = new Map<string, SlotEntry>();
+  private chefRig!: ChefRig;
+  private chefSig = "";
   private custViews = new Map<number, CustView>();
-  private tableViews = new Map<number, THREE.Group>();
-  private tableGhost: THREE.Group | null = null;
-  private chef: ChefRig;
-  private helper: ChefRig;
-  private carryHolder = new THREE.Group();
+  private slotViews = new Map<string, SlotView>();
+  private stationSlots = new Map<string, THREE.Vector3[]>();
+  private carryMesh: THREE.Group | null = null;
   private carrySig = "";
-  private floaters: THREE.Sprite[] = [];
+  private beacon: THREE.Group;
+  private beaconIcon: THREE.Sprite;
+  private beaconIconStr = "";
+  private figures: Figures;
+  private bubbleTex: THREE.CanvasTexture;
+  private petRig!: PetRig;
+  private petSig = "";
+  private petPrev = { x: 0, z: 0, face: 0 };
+  private plantViews = new Map<number, { mesh: THREE.Group; sig: string }>();
+  // Diffable world (rebuilt when config colours/layout change).
+  private roomMesh: THREE.Group | null = null;
+  private roomSig = "";
+  private tableMeshes: THREE.Group[] = [];
+  private tableSig = "";
+  private stationMeshes = new Map<StationId, THREE.Group>();
+  private signSprites = new Map<StationId, THREE.Sprite>();
+  private stationSig = "";
+  // Treat decorations (a picked treat visibly redecorates the diner).
+  private decorBalloons: THREE.Group;
+  private decorClock: THREE.Group;
+  private decorRug: THREE.Group;
+  private decorFlames: THREE.Group[] = [];
+  private helperRig: ChefRig;
+  private lastTreatSig = "?";
+  private iconCache = new Map<string, THREE.CanvasTexture>();
 
-  private cursorTile: THREE.Mesh;
-  private ghost: THREE.Group | null = null;
-  private ghostSig = "";
-  private ray = new THREE.Raycaster();
-  private groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
-  private time = 0;
-  private neonMat: THREE.MeshStandardMaterial | null = null;
-  private readonly scratch = new THREE.Vector3();
+  private lastScene: object | null = null;
+  private lastShot = -1;
+  private posV = new THREE.Vector3();
+  private lookV = new THREE.Vector3();
 
-  constructor(stage: Stage, G: GameState) {
-    this.scene = stage.scene;
-    this.camera = stage.camera;
-    this.buildEnvironment(G);
+  constructor(private stage: Stage, G: GameState) {
+    const scene = stage.scene;
 
-    this.chef = buildChef();
-    this.scene.add(this.chef.group);
-    this.scene.add(this.carryHolder);
+    // The customizable world (room/tables/stations/signs/chef/pet) — built now,
+    // rebuilt on config change by syncWorld.
+    this.syncWorld(G);
 
-    this.helper = buildChef({ helper: true });
-    this.helper.group.visible = false;
-    this.scene.add(this.helper.group);
+    this.bubbleTex = bubbleBgTex();
 
-    this.cursorTile = new THREE.Mesh(
-      new THREE.PlaneGeometry(TILE * 0.94, TILE * 0.94),
-      new THREE.MeshBasicMaterial({ color: 0x66ff99, transparent: true, opacity: 0.32, depthWrite: false }),
-    );
-    this.cursorTile.rotation.x = -Math.PI / 2;
-    this.cursorTile.position.y = 0.03;
-    this.cursorTile.visible = false;
-    this.scene.add(this.cursorTile);
-  }
-
-  // ── Static environment ──────────────────────────────────────────────────
-  private buildEnvironment(G: GameState): void {
-    const cols = G.grid.cols;
-    const rows = G.grid.rows;
-    const width = cols * TILE + 4;
-    const backZ = worldOfCell(G.grid, 0, rows - 1).z + TILE;
-
-    // Kitchen tile floor.
-    const floorTex = canvasTex(256, (ctx, s) => {
-      const t = s / 8;
-      for (let y = 0; y < 8; y++)
-        for (let x = 0; x < 8; x++) {
-          ctx.fillStyle = (x + y) % 2 === 0 ? "#7a72ad" : "#6f679f";
-          ctx.fillRect(x * t, y * t, t, t);
-        }
+    this.beacon = new THREE.Group();
+    const ringTex = canvasTex(128, (ctx, s) => {
+      ctx.clearRect(0, 0, s, s);
+      ctx.strokeStyle = "rgba(124,255,138,1)";
+      ctx.lineWidth = 14;
+      ctx.beginPath();
+      ctx.arc(s / 2, s / 2, s / 2 - 14, 0, Math.PI * 2);
+      ctx.stroke();
     });
-    floorTex.wrapS = floorTex.wrapT = THREE.RepeatWrapping;
-    floorTex.repeat.set(cols, rows + 2);
-    const floor = new THREE.Mesh(
-      new THREE.PlaneGeometry(width, backZ - COUNTER_Z + 2),
-      stdMat(0xffffff, { rough: 0.95 }),
-    );
-    (floor.material as THREE.MeshStandardMaterial).map = floorTex;
-    floor.rotation.x = -Math.PI / 2;
-    floor.position.set(0, 0, (COUNTER_Z + backZ) / 2 + 0.5);
-    floor.receiveShadow = true;
-    this.scene.add(floor);
+    const ring = new THREE.Mesh(new THREE.PlaneGeometry(2.2, 2.2), new THREE.MeshBasicMaterial({ map: ringTex, transparent: true, depthWrite: false }));
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.y = 0.05;
+    // Float the beacon WELL above the station signs (y≈2.45) and guest order
+    // bubbles so the "go here" arrow + icon never overlap them.
+    const arrow = emojiSprite("⬇️", 0.9);
+    arrow.position.y = 4.0;
+    this.beaconIcon = emojiSprite("✨", 1.0);
+    this.beaconIcon.position.y = 3.3;
+    this.beacon.add(ring, arrow, this.beaconIcon);
+    this.beacon.visible = false;
+    scene.add(this.beacon);
 
-    // Dining floor (customer side) — warm wood.
-    const dining = new THREE.Mesh(
-      new THREE.PlaneGeometry(width, 7),
-      stdMat(0x9a6c44, { rough: 0.85 }),
-    );
-    dining.rotation.x = -Math.PI / 2;
-    dining.position.set(0, -0.01, CUSTOMER_Z - 2.4);
-    dining.receiveShadow = true;
-    this.scene.add(dining);
-
-    // Service counter — two segments with a central gap the chef walks through.
-    const counterTopMat = stdMat(0xb9c2cc, { rough: 0.4, metal: 0.3 });
-    const counterBodyMat = stdMat(0x7a5a3c, { rough: 0.7 });
-    for (const seg of [[-HALF_W, -GAP_HALF], [GAP_HALF, HALF_W]]) {
-      const w = seg[1] - seg[0];
-      const cx = (seg[0] + seg[1]) / 2;
-      const top = box(w, 0.2, 1.1, counterTopMat);
-      top.position.set(cx, 1.0, COUNTER_Z);
-      const body = box(w, 1.0, 0.9, counterBodyMat);
-      body.position.set(cx, 0.5, COUNTER_Z);
-      this.scene.add(top, body);
+    // Treat decorations — built hidden, revealed when the matching treat is owned.
+    this.decorBalloons = buildBalloons();
+    this.decorBalloons.position.set(10.6, 0, -7.5);
+    this.decorClock = buildWallClock();
+    this.decorClock.position.set(-6, 5.3, -9.85);
+    this.decorRug = buildRug();
+    this.decorRug.position.set(0, 0, -1.5);
+    this.helperRig = buildChef();
+    this.helperRig.group.position.set(-8.4, 0, -6.3);
+    this.helperRig.group.rotation.y = 0.4;
+    for (const obj of [this.decorBalloons, this.decorClock, this.decorRug, this.helperRig.group]) {
+      obj.visible = false;
+      scene.add(obj);
     }
-    // (Dining tables are placed dynamically from G.tables in syncTables.)
-
-    // Restaurant back wall (behind the customers) with glowing windows + neon.
-    const wallZ = CUSTOMER_Z - 3.4;
-    const wall = new THREE.Mesh(new THREE.BoxGeometry(width, 7, 0.4), stdMat(0x423e68, { rough: 0.85 }));
-    wall.position.set(0, 3.2, wallZ);
-    wall.receiveShadow = true;
-    this.scene.add(wall);
-    for (let i = -1; i <= 1; i++) {
-      const win = new THREE.Mesh(
-        new THREE.BoxGeometry(3.2, 2.4, 0.12),
-        stdMat(0x0c1430, { emissive: 0x2d4a8a, emissiveIntensity: 0.9 }),
-      );
-      win.position.set(i * 5.5, 3.2, wallZ + 0.25);
-      this.scene.add(win);
-    }
-    const neon = new THREE.Mesh(
-      new THREE.BoxGeometry(6, 0.9, 0.2),
-      stdMat(0x111111, { emissive: 0xff5ab0, emissiveIntensity: 1.7 }),
-    );
-    neon.position.set(0, 5.6, wallZ + 0.3);
-    this.scene.add(neon);
-    this.neonMat = neon.material as THREE.MeshStandardMaterial;
-    // A back wall behind the kitchen too, so the room reads as enclosed.
-    const kWall = new THREE.Mesh(new THREE.BoxGeometry(width, 5, 0.4), stdMat(0x383260, { rough: 0.9 }));
-    kWall.position.set(0, 2.5, backZ + 1.2);
-    kWall.receiveShadow = true;
-    this.scene.add(kWall);
-
-    // ── Cute decorations ──
-    // Bunting garland strung in a gentle droop over the service counter.
-    const span = (cols / 2) * TILE; // ~ play width
-    const buntZ = COUNTER_Z + 0.8;
-    const flagCols = [0xff9ec4, 0xffd27a, 0x9ed8ff, 0xb6f0a8, 0xd5a8ff];
-    const NF = 16;
-    for (let i = 0; i < NF; i++) {
-      const ft = i / (NF - 1);
-      const fc = flagCols[i % flagCols.length];
-      const droop = Math.sin(ft * Math.PI) * 0.55;
-      const flag = new THREE.Mesh(
-        new THREE.ConeGeometry(0.24, 0.46, 4),
-        stdMat(fc, { rough: 0.6, emissive: fc, emissiveIntensity: 0.2 }),
-      );
-      flag.rotation.x = Math.PI;
-      flag.rotation.y = Math.PI / 4;
-      flag.position.set(-span + ft * span * 2, 4.5 - droop, buntZ);
-      this.scene.add(flag);
-    }
-    // A glowing heart sign hung above the counter centre.
-    const heartMat = stdMat(0x331018, { emissive: 0xff5a9e, emissiveIntensity: 1.4 });
-    const heart = group();
-    const lobeL = sphere(0.34, heartMat, 12);
-    lobeL.position.set(-0.26, 0.18, 0);
-    const lobeR = sphere(0.34, heartMat, 12);
-    lobeR.position.set(0.26, 0.18, 0);
-    const tip = new THREE.Mesh(new THREE.ConeGeometry(0.5, 0.72, 14), heartMat);
-    tip.rotation.x = Math.PI;
-    tip.position.set(0, -0.34, 0);
-    heart.add(lobeL, lobeR, tip);
-    heart.position.set(0, 4.95, buntZ);
-    heart.scale.setScalar(0.62);
-    this.scene.add(heart);
-    // Potted plants sitting on the counter.
-    for (const sx of [-1, 1]) {
-      const plant = buildDecor("plant");
-      plant.position.set(sx * 5.6, 1.1, COUNTER_Z);
-      plant.scale.setScalar(0.8);
-      this.scene.add(plant);
+    for (let i = 0; i < 3; i++) {
+      const fl = buildFlame();
+      fl.visible = false;
+      scene.add(fl);
+      this.decorFlames.push(fl);
     }
 
-    // Hanging lamps over the kitchen.
-    for (let i = -1; i <= 1; i++) {
-      const lamp = group(
-        cyl(0.05, 0.05, 1.4, stdMat(0x222222), 6),
-        (() => {
-          const shade = cyl(0.5, 0.3, 0.4, stdMat(0x222222, { emissive: 0xffd9a0, emissiveIntensity: 0.6 }), 10);
-          shade.position.y = -0.85;
-          return shade;
-        })(),
-      );
-      lamp.position.set(i * 4.6, 5.4, 3.2);
-      this.scene.add(lamp);
+    this.petPrev.x = G.pet.x;
+    this.petPrev.z = G.pet.z;
+
+    // Garden planters along the front — rebuilt when their stage/style changes.
+    G.plants.forEach((pl, i) => {
+      const bloom = G.config.plants[i]?.bloom;
+      const mesh = buildPlant(pl.stage, pl.kind, bloom);
+      mesh.position.set(pl.x, 0, pl.z);
+      scene.add(mesh);
+      this.plantViews.set(i, { mesh, sig: `${pl.stage}:${pl.kind}:${bloom ?? -1}` });
+    });
+
+    this.figures = new Figures(scene);
+  }
+
+  private getIconTex(icon: string): THREE.CanvasTexture {
+    let t = this.iconCache.get(icon);
+    if (!t) {
+      t = iconTex(icon);
+      this.iconCache.set(icon, t);
+    }
+    return t;
+  }
+
+  // ── Customizable world (room/tables/stations/signs/chef/pet) ─────────────────
+  private syncWorld(G: GameState): void {
+    const scene = this.stage.scene;
+
+    // Room (palette + name on the back sign).
+    const rs = sig(G.config.palette) + "|" + G.config.name;
+    if (rs !== this.roomSig) {
+      this.roomSig = rs;
+      if (this.roomMesh) { scene.remove(this.roomMesh); disposeTree(this.roomMesh); }
+      this.roomMesh = buildDinerRoom(G.config.palette, G.config.name);
+      scene.add(this.roomMesh);
+    }
+
+    // Tables (style + count). Rebuild on change; reposition each frame.
+    const ts = sig(G.config.table) + ":" + G.tables.length;
+    if (ts !== this.tableSig) {
+      this.tableSig = ts;
+      for (const m of this.tableMeshes) { scene.remove(m); disposeTree(m); }
+      this.tableMeshes = G.tables.map(() => {
+        const t = buildTable(G.config.table);
+        scene.add(t);
+        return t;
+      });
+    }
+    G.tables.forEach((tb, i) => this.tableMeshes[i]?.position.set(tb.x, 0, tb.z));
+
+    // Stations + floating signs (style). Rebuild on change; reposition + show only
+    // the stations the current menu actually needs (cleaner, kid-readable diner).
+    const active = activeStationIds(G);
+    const ss = sig(G.config.station);
+    if (ss !== this.stationSig) {
+      this.stationSig = ss;
+      for (const m of this.stationMeshes.values()) { scene.remove(m); disposeTree(m); }
+      for (const sp of this.signSprites.values()) scene.remove(sp);
+      this.stationMeshes.clear();
+      this.signSprites.clear();
+      this.stationSlots.clear();
+      for (const st of G.stations) {
+        const mesh = buildStation(st.id, G.config.station);
+        scene.add(mesh);
+        this.stationMeshes.set(st.id, mesh);
+        this.stationSlots.set(st.id, (mesh.userData.slots as THREE.Vector3[]) ?? []);
+        const def = stationDef(st.id);
+        const icon = st.kind === "cook" ? "🔥" : st.kind === "trash" ? "🗑️" : def.gives ? food(def.gives).icon : def.icon;
+        const sp = signSprite(icon, def.color);
+        scene.add(sp);
+        this.signSprites.set(st.id, sp);
+      }
+    }
+    for (const st of G.stations) {
+      const mesh = this.stationMeshes.get(st.id);
+      if (mesh) {
+        mesh.position.set(st.x, 0, st.z);
+        mesh.rotation.y = st.ry;
+        mesh.visible = active.has(st.id);
+      }
+      const sp = this.signSprites.get(st.id);
+      if (sp) {
+        sp.position.set(st.x, 2.45, st.z);
+        sp.visible = active.has(st.id);
+      }
+    }
+
+    // Chef look.
+    const cs = sig(G.config.chef);
+    if (cs !== this.chefSig) {
+      this.chefSig = cs;
+      if (this.chefRig) { scene.remove(this.chefRig.group); disposeTree(this.chefRig.group); }
+      this.chefRig = buildChef({ look: G.config.chef });
+      scene.add(this.chefRig.group);
+    }
+
+    // Pet kind + colours.
+    const ps = sig(G.config.pet);
+    if (ps !== this.petSig) {
+      this.petSig = ps;
+      if (this.petRig) { scene.remove(this.petRig.group); disposeTree(this.petRig.group); }
+      this.petRig = buildPet(G.config.pet);
+      scene.add(this.petRig.group);
     }
   }
 
-  // ── Per-frame sync ──────────────────────────────────────────────────────
-  update(G: GameState, dt: number, input: Input): void {
-    const its = items(G.grid); // compute the placed-item list once per frame
-    this.syncLayout(G, its);
-    this.syncTables(G);
-    this.syncSlotFood(its);
+  update(G: GameState, dt: number): void {
+    if (G.phase === "cutscene" && G.cutscene) {
+      this.syncCutscene(G);
+      return;
+    }
+    if (this.lastScene !== null) {
+      this.stage.setCinematic(false);
+      this.figures.hideAll();
+      this.lastScene = null;
+      this.lastShot = -1;
+    }
+    this.syncWorld(G);
+    if (G.phase === "setup") {
+      this.stage.setPreviewFocus(G.studioFocus); // chef close-up vs. whole-room view
+      if (!this.inSetup) { this.inSetup = true; this.stage.snapPreview(); } // snap in once, then glide
+      this.syncPreview(G, dt);
+      this.syncPlants(G);
+      return;
+    }
+    this.inSetup = false;
+    this.stage.setPreview(false);
     this.syncChef(G, dt);
-    this.syncHelper(G, dt);
-    this.syncCustomers(G, dt);
     this.syncCarry(G);
-    this.syncFloaters(G);
-    this.syncBuild(G, input);
-    this.animateDecor(dt);
-    this.animateStations(dt, its);
+    this.syncCustomers(G, dt);
+    this.syncSlots(G);
+    this.syncPet(G, dt);
+    this.syncPlants(G);
+    this.syncDecor(G, dt);
+    this.syncBeacon(G);
   }
 
-  private syncLayout(G: GameState, its: PlacedItem[]): void {
-    const live = new Set<number>();
-    for (const it of its) {
-      live.add(it.uid);
-      let v = this.itemViews.get(it.uid);
-      if (!v) {
-        const d = def(it.defId);
-        const g = d?.category === "decor" ? buildDecor(it.defId) : buildStation(it.defId);
-        this.scene.add(g);
-        v = { group: g, defId: it.defId };
-        // Grills/fryers glow — a warm point light that brightens while cooking.
-        if (d?.kind === "grill" || d?.kind === "fryer") {
-          const light = new THREE.PointLight(d.kind === "grill" ? 0xff6a2a : 0xffb066, 0.3, 3.6, 2);
-          // Sit the light well ABOVE the cooktop — close to the emissive embers it
-          // would over-light them into a blooming flare when the food flips clear.
-          light.position.set(0, 1.95, 0);
-          g.add(light);
-          v.light = light;
-        }
-        // Floating icon over storage/utility stations so they read clearly.
-        if (d && (d.kind === "bin" || d.kind === "trash" || d.kind === "drink")) {
-          const label = makeEmoji(d.icon, 0.8);
-          label.position.set(0, 1.78, 0);
-          g.add(label);
-        }
-        this.itemViews.set(it.uid, v);
-      }
-      const { x, z } = worldOfCell(G.grid, it.col, it.row);
-      v.group.position.set(x, 0, z);
-      v.group.rotation.y = (it.rot * Math.PI) / 2;
-      v.group.visible = true;
+  // ── Setup studio preview: chef + pet on a slow turntable. Framed close for
+  //    Chef/Pet edits, or standing in the room (front-centre) for room edits so the
+  //    walls/floor/tables/equipment colours are clearly visible changing. ──
+  private previewSpin = 0;
+  private inSetup = false;
+  private syncPreview(G: GameState, dt: number): void {
+    const room = G.studioFocus === "room";
+    this.previewSpin += dt * 0.45;
+    // Mostly face the camera, with a gentle look left↔right so all sides show.
+    const face = Math.sin(this.previewSpin) * 0.5;
+    // Room view: chef + pet both stand front-centre in the room. Close-up view:
+    // show ONLY the subject being edited (chef OR pet), centred — so the other
+    // never crops in or pulls focus.
+    const editingPet = G.studioCat === "pet";
+    const showChef = room || !editingPet;
+    const showPet = room || editingPet;
+    this.chefRig.group.visible = showChef;
+    if (showChef) {
+      this.chefRig.group.position.set(room ? -1.4 : 4.3, 0, room ? 1.0 : 2.5);
+      this.chefRig.update(dt, { speed: 0, face, carrying: false, cook: 0, fire: 0, cheer: 0 });
     }
-    for (const [uid, v] of this.itemViews) {
-      if (!live.has(uid)) {
-        this.scene.remove(v.group);
-        disposeTree(v.group);
-        this.itemViews.delete(uid);
-      }
+    this.petRig.group.visible = showPet;
+    if (showPet) {
+      this.petRig.group.position.set(room ? 0.6 : 4.3, 0, room ? 1.4 : 2.5);
+      this.petRig.update(dt, { speed: 0, face: face + 0.3, happy: 1, wag: G.t * 6, hop: 0 });
     }
+    if (this.carryMesh) this.carryMesh.visible = false;
+    for (const v of this.custViews.values()) v.rig.group.visible = false;
+    // Hide the floating station signs in the studio preview — they otherwise poke
+    // into the top of the frame and clip / overlap the setup UI.
+    for (const sp of this.signSprites.values()) sp.visible = false;
+    // In the character close-up, hide the kitchen clutter (stations / tables / bins)
+    // so the chef or pet is the clean, sole subject. The room view keeps them.
+    if (!room) {
+      for (const m of this.stationMeshes.values()) m.visible = false;
+      for (const m of this.tableMeshes) m.visible = false;
+    }
+    this.beacon.visible = false;
   }
 
-  /** Sync the dining tables to G.tables — the player arranges these in build mode. */
-  private syncTables(G: GameState): void {
-    const live = new Set<number>();
-    for (const t of G.tables) {
-      live.add(t.uid);
-      let g = this.tableViews.get(t.uid);
-      if (!g) {
-        g = buildTableMesh();
-        this.scene.add(g);
-        this.tableViews.set(t.uid, g);
-      }
-      const { x, z } = tableWorld(t.col);
-      g.position.set(x, 0, z);
+  /** Reveal decor for owned treats (so picking a treat visibly redecorates). */
+  private syncDecor(G: GameState, dt: number): void {
+    const s = G.treats.join(",");
+    if (s !== this.lastTreatSig) {
+      this.lastTreatSig = s;
+      const has = (id: string) => G.treats.includes(id as GameState["treats"][number]);
+      this.decorBalloons.visible = has("extracustomer");
+      this.decorClock.visible = has("time");
+      this.decorRug.visible = has("fast");
+      this.helperRig.group.visible = has("helper");
+      const qc = has("quickcook");
+      const cooks = G.stations.filter((st) => st.kind === "cook");
+      this.decorFlames.forEach((fl, i) => {
+        const st = cooks[i];
+        fl.visible = qc && !!st;
+        if (st) fl.position.set(st.x, 1.7, st.z);
+      });
     }
-    for (const [uid, g] of this.tableViews) {
-      if (!live.has(uid)) {
-        this.scene.remove(g);
-        disposeTree(g);
-        this.tableViews.delete(uid);
-      }
+    for (const fl of this.decorFlames) {
+      if (fl.visible) fl.scale.y = 1 + Math.sin(G.t * 12 + fl.position.x) * 0.22;
     }
-  }
-
-  /** Place an entry at a station's local slot anchor (reuses a scratch vector)
-   *  and animate it: a patty somersault-flip on the grill, a fryer shimmy, or a
-   *  gentle sizzle bob — plus a squash-stretch "pop" the moment it's placed. */
-  private placeAtSlot(entry: SlotEntry, view: ItemView | undefined, local: THREE.Vector3 | undefined): void {
-    if (!view) return;
-    this.scratch.copy(local ?? FOOD_ANCHOR);
-    view.group.localToWorld(this.scratch);
-    const g = entry.group;
-    g.position.copy(this.scratch);
-    const t = this.time + entry.phase;
-    let yLift = 0;
-
-    if (entry.motion === "flip") {
-      // Toss the patty for a satisfying somersault every couple of seconds; a
-      // high arc so the wide puck clears the griddle as it turns over. Gentle
-      // sizzle jitter between flips.
-      const period = 2.4;
-      const lt = ((t % period) + period) % period;
-      const flipDur = 0.6;
-      if (lt < flipDur) {
-        const f = lt / flipDur; // 0..1 through the flip
-        yLift = Math.sin(f * Math.PI) * 0.85; // leap up and back down
-        g.rotation.set(f * Math.PI * 2, 0, Math.sin(f * Math.PI) * 0.2);
-      } else {
-        yLift = Math.abs(Math.sin(t * 7)) * 0.04;
-        g.rotation.set(0, 0, Math.sin(t * 3.4) * 0.05);
-      }
-    } else if (entry.motion === "shake") {
-      // Fryer basket shimmy: a quick side-to-side jiggle.
-      g.position.x += Math.sin(t * 24) * 0.03;
-      yLift = Math.abs(Math.sin(t * 15)) * 0.05;
-      g.rotation.set(0, 0, Math.sin(t * 20) * 0.1);
-    } else {
-      // Gentle living bob (plates, soda, burnt scraps).
-      yLift = Math.abs(Math.sin(t * 4)) * 0.03;
-      g.rotation.set(0, Math.sin(t * 1.6) * 0.12, Math.sin(t * 2.6) * 0.05);
-    }
-
-    // Placement pop: squash-stretch up to full size over the first ~1/3 s so food
-    // landing on a slot (and each part added to a plate) feels tactile.
-    const age = this.time - entry.bornTime;
-    g.scale.setScalar(age < 0.34 ? 0.45 + 0.55 * easeOutBack(age / 0.34) : 1);
-
-    g.position.y += yLift;
-  }
-
-  private syncSlotFood(its: PlacedItem[]): void {
-    const live = new Set<string>();
-    for (const it of its) {
-      const d = def(it.defId);
-      if (!it.slots || !d?.kind) continue;
-      const view = this.itemViews.get(it.uid);
-      const slots = (view?.group.userData.slots as THREE.Vector3[] | undefined) ?? [];
-      for (let i = 0; i < it.slots.length; i++) {
-        const slot = it.slots[i];
-        if (slot.filling === null) continue;
-        const key = `${it.uid}:${i}`;
-        const spec = slotMeshSpec(d.kind, slot);
-        live.add(key);
-        let entry = this.slotFood.get(key);
-        if (!entry || entry.sig !== spec.sig) {
-          if (entry) {
-            this.scene.remove(entry.group);
-            disposeTree(entry.group);
-          }
-          const g = spec.build();
-          this.scene.add(g);
-          entry = { group: g, sig: spec.sig, phase: it.uid * 0.9 + i, motion: spec.motion, bornTime: this.time, cook: spec.cook };
-          this.slotFood.set(key, entry);
-        }
-        this.placeAtSlot(entry, view, slots[i]);
-        // Live-cooking items brown/sear continuously as they cook.
-        if (entry.cook === "patty") tintCookingPatty(entry.group, slot);
-        else if (entry.cook === "fries") tintCookingFries(entry.group, slot);
-      }
-      // Prep plate.
-      if (d.kind === "prep" && it.plate && it.plate.length > 0) {
-        const key = `${it.uid}:plate`;
-        const sig = plateSig(it.plate);
-        live.add(key);
-        let entry = this.slotFood.get(key);
-        if (!entry || entry.sig !== sig) {
-          if (entry) {
-            this.scene.remove(entry.group);
-            disposeTree(entry.group);
-          }
-          const g = buildPlate(it.plate);
-          this.scene.add(g);
-          entry = { group: g, sig, phase: it.uid * 0.9, motion: "bob", bornTime: this.time };
-          this.slotFood.set(key, entry);
-        }
-        this.placeAtSlot(entry, view, slots[0]);
-      }
-    }
-    for (const [key, entry] of this.slotFood) {
-      if (!live.has(key)) {
-        this.scene.remove(entry.group);
-        disposeTree(entry.group);
-        this.slotFood.delete(key);
-      }
+    if (this.helperRig.group.visible) {
+      this.helperRig.update(dt, { speed: 0, face: 0.4, carrying: false, cook: 0.4, fire: 0, cheer: 0 });
     }
   }
 
+  private syncPet(G: GameState, dt: number): void {
+    const p = G.pet;
+    this.petRig.group.visible = true;
+    this.petPrev.x = p.x;
+    this.petPrev.z = p.z;
+    const speed = Math.hypot(p.vx, p.vz);
+    if (speed > 0.2) this.petPrev.face = Math.atan2(p.vx, p.vz);
+    this.petRig.group.position.set(p.x, 0, p.z);
+    this.petRig.update(dt, { speed, face: this.petPrev.face, happy: p.happy, wag: p.wag, hop: p.hop });
+  }
+
+  private syncPlants(G: GameState): void {
+    G.plants.forEach((pl, i) => {
+      const bloom = G.config.plants[i]?.bloom;
+      const s = `${pl.stage}:${pl.kind}:${bloom ?? -1}`;
+      const v = this.plantViews.get(i);
+      if (v && v.sig === s) return;
+      if (v) {
+        this.stage.scene.remove(v.mesh);
+        disposeTree(v.mesh);
+      }
+      const mesh = buildPlant(pl.stage, pl.kind, bloom);
+      mesh.position.set(pl.x, 0, pl.z);
+      this.stage.scene.add(mesh);
+      this.plantViews.set(i, { mesh, sig: s });
+    });
+  }
+
+  // ── Cutscene ──
+  private syncCutscene(G: GameState): void {
+    const cs = G.cutscene!;
+    this.stage.setCinematic(true);
+    if (this.lastScene !== cs.scene) {
+      this.lastScene = cs.scene;
+      this.lastShot = -1;
+      this.figures.setCast(cs.scene.cast ?? []);
+      this.stage.setTimeOfDay(cs.scene.warm ? 0.5 : 0);
+      this.chefRig.group.visible = false;
+      if (this.carryMesh) this.carryMesh.visible = false;
+      for (const v of this.custViews.values()) v.rig.group.visible = false;
+      this.petRig.group.visible = false;
+      this.beacon.visible = false;
+    }
+    const shot = currentShot(cs);
+    if (!shot) return;
+    const e = easeInOut(shotProgress(cs));
+    const to = shot.to ?? shot.from;
+    this.posV.set(
+      shot.from.pos[0] + (to.pos[0] - shot.from.pos[0]) * e,
+      shot.from.pos[1] + (to.pos[1] - shot.from.pos[1]) * e,
+      shot.from.pos[2] + (to.pos[2] - shot.from.pos[2]) * e,
+    );
+    this.lookV.set(
+      shot.from.look[0] + (to.look[0] - shot.from.look[0]) * e,
+      shot.from.look[1] + (to.look[1] - shot.from.look[1]) * e,
+      shot.from.look[2] + (to.look[2] - shot.from.look[2]) * e,
+    );
+    if (cs.shotIndex !== this.lastShot) {
+      this.lastShot = cs.shotIndex;
+      this.stage.snapCinePose(this.posV, this.lookV, shot.fov ?? 50);
+    }
+    this.stage.setCinePose(this.posV, this.lookV, shot.fov ?? 50, shot.handheld ?? 0.6);
+    this.figures.update(1 / 60);
+  }
+
+  // ── Chef ──
   private syncChef(G: GameState, dt: number): void {
-    this.chef.group.position.set(G.chef.x, 0, G.chef.z);
-    const cook = Math.min(1, G.chef.cookT / 0.42);
-    this.chef.update(dt, { walk: G.chef.walk, face: G.chef.face, fire: G.chef.fire, carrying: G.carry !== null, cook });
+    const c = G.chef;
+    this.chefRig.group.visible = true;
+    this.chefRig.group.position.set(c.x, 0, c.z);
+    this.chefRig.update(dt, {
+      speed: Math.hypot(c.vx, c.vz),
+      face: c.facing,
+      carrying: c.carry !== null,
+      cook: c.cookT / COOK_PULSE,
+      fire: G.fire,
+      cheer: c.cheer,
+    });
   }
 
-  private syncHelper(G: GameState, dt: number): void {
-    this.helper.group.visible = G.helper.hired;
-    if (!G.helper.hired) return;
-    this.helper.group.position.set(G.helper.x, 0, G.helper.z);
-    this.helper.update(dt, { walk: 4, face: Math.PI, fire: 0, carrying: false, cook: 0 });
+  private carrySigOf(carry: Carry): string {
+    if (!carry) return "";
+    if (carry.kind === "burnt") return "burnt";
+    if (carry.kind === "raw") return "raw:" + carry.food;
+    return "ready:" + carry.food + ":" + carry.quality;
+  }
+
+  private syncCarry(G: GameState): void {
+    const c = G.chef;
+    const s = this.carrySigOf(c.carry);
+    if (s !== this.carrySig) {
+      this.carrySig = s;
+      if (this.carryMesh) {
+        this.stage.scene.remove(this.carryMesh);
+        disposeTree(this.carryMesh);
+        this.carryMesh = null;
+      }
+      if (c.carry) {
+        this.carryMesh = buildCarryMesh(c.carry);
+        this.carryMesh.scale.setScalar(0.85);
+        this.stage.scene.add(this.carryMesh);
+      }
+    }
+    if (this.carryMesh) {
+      this.carryMesh.visible = true;
+      const fx = c.x + Math.sin(c.facing) * 0.35;
+      const fz = c.z + Math.cos(c.facing) * 0.35;
+      this.carryMesh.position.set(fx, 1.5, fz);
+      this.carryMesh.rotation.y = c.facing;
+    }
+  }
+
+  // ── Customers ──
+  private buildBubble(icon: string, color: number): { bubble: THREE.Group; barFill: THREE.Mesh } {
+    const bubble = new THREE.Group();
+    const bg = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.bubbleTex, transparent: true, depthWrite: false }));
+    bg.material.color = new THREE.Color(color).lerp(new THREE.Color(0xffffff), 0.55);
+    bg.scale.set(1.35, 1.35, 1);
+    const icn = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.getIconTex(icon), transparent: true, depthWrite: false }));
+    icn.scale.set(1.05, 1.05, 1);
+    icn.position.set(0, 0.06, 0.01);
+    const barBg = new THREE.Mesh(new THREE.BoxGeometry(0.98, 0.13, 0.04), new THREE.MeshBasicMaterial({ color: 0x2a2433 }));
+    barBg.position.set(0, -0.74, 0);
+    const barFill = new THREE.Mesh(new THREE.BoxGeometry(0.92, 0.09, 0.06), new THREE.MeshBasicMaterial({ color: 0x7cff8a }));
+    barFill.position.set(0, -0.74, 0.02);
+    bubble.add(bg, icn, barBg, barFill);
+    bubble.position.set(0, 2.2, 0);
+    return { bubble, barFill };
   }
 
   private syncCustomers(G: GameState, dt: number): void {
     const live = new Set<number>();
-    for (const c of G.customers) {
-      live.add(c.uid);
-      let v = this.custViews.get(c.uid);
+    for (const cust of G.customers) {
+      live.add(cust.uid);
+      let v = this.custViews.get(cust.uid);
       if (!v) {
-        const rig = buildCustomer(c.look);
-        this.scene.add(rig.group);
-        const icon = makeEmoji(c.recipe.icon, 1.1);
-        const bar = new THREE.Mesh(
-          new THREE.PlaneGeometry(1.2, 0.16),
-          new THREE.MeshBasicMaterial({ color: 0x66ff66, depthWrite: false }),
-        );
-        const barBg = new THREE.Mesh(
-          new THREE.PlaneGeometry(1.26, 0.22),
-          new THREE.MeshBasicMaterial({ color: 0x111111, depthWrite: false }),
-        );
-        barBg.position.z = -0.01;
-        const bubble = group(icon, bar, barBg);
-        this.scene.add(bubble);
-        // Special-customer flourish: a glowing floor ring (kept as its own scene
-        // object so it stays on the floor when the guest lifts onto a stool) + a
-        // badge in the bubble.
-        const kindColor = c.kind === "vip" ? 0xffd24a : c.kind === "critic" ? 0x6cc6ff : 0;
-        let ring: THREE.Mesh | undefined;
-        if (kindColor) {
-          ring = new THREE.Mesh(
-            new THREE.RingGeometry(0.5, 0.74, 26),
-            new THREE.MeshBasicMaterial({ color: kindColor, transparent: true, opacity: 0.75, side: THREE.DoubleSide, depthWrite: false }),
-          );
-          ring.rotation.x = -Math.PI / 2;
-          this.scene.add(ring);
-          const badge = makeEmoji(c.kind === "vip" ? "👑" : "📸", 0.62);
-          badge.position.set(0.62, 0.5, 0.02);
-          bubble.add(badge);
-        }
-        v = { rig, bubble, bar, icon, ring, shownT: 0 };
-        this.custViews.set(c.uid, v);
+        const rig = buildCustomer(cust.look);
+        const fd = food(cust.order);
+        const { bubble, barFill } = this.buildBubble(fd.icon, fd.color);
+        rig.group.add(bubble);
+        this.stage.scene.add(rig.group);
+        v = { rig, bubble, barFill, prevX: cust.x, prevZ: cust.z, face: 0 };
+        this.custViews.set(cust.uid, v);
       }
-      v.rig.group.position.set(c.x, 0, c.z);
-      v.rig.update(dt, { bob: c.bob, anger: c.anger, state: c.state, walk: c.walk, face: c.face });
-      if (v.ring) v.ring.position.set(c.x, 0.05, c.z);
-      // Order bubble.
-      const showBubble = c.state === "waiting" || c.state === "walkin";
-      v.bubble.visible = showBubble;
-      if (showBubble) {
-        v.shownT += dt;
-        v.bubble.position.set(c.x, 2.0, c.z);
-        v.bubble.lookAt(this.camera.position);
-        v.bubble.scale.setScalar(easeOutBack(Math.min(1, v.shownT / 0.32)));
-        const frac = Math.max(0, c.patience / c.maxPatience);
-        v.bar.scale.x = Math.max(0.001, frac);
-        v.bar.position.x = -(1 - frac) * 0.6;
-        v.bar.position.y = -0.7;
-        (v.bar.material as THREE.MeshBasicMaterial).color.setHSL(0.33 * frac, 0.8, 0.5);
-        v.icon.position.y = 0.1;
-      }
+      this.updateCustView(v, cust, dt, G.t);
     }
     for (const [uid, v] of this.custViews) {
       if (!live.has(uid)) {
-        this.scene.remove(v.rig.group);
-        this.scene.remove(v.bubble);
-        disposeGeom(v.rig.group); // actors share module-level materials
-        disposeTree(v.bubble);
-        if (v.ring) {
-          this.scene.remove(v.ring);
-          disposeTree(v.ring);
-        }
+        this.stage.scene.remove(v.rig.group);
+        disposeTree(v.rig.group);
         this.custViews.delete(uid);
       }
     }
   }
 
-  private syncCarry(G: GameState): void {
-    const sig = carrySig(G.carry);
-    if (sig !== this.carrySig) {
-      this.carrySig = sig;
-      for (const child of this.carryHolder.children) disposeTree(child);
-      this.carryHolder.clear();
-      const mesh = makeCarryMesh(G.carry);
-      if (mesh) this.carryHolder.add(mesh);
-    }
-    const c = G.chef;
-    this.carryHolder.visible = G.carry !== null;
-    this.carryHolder.position.set(c.x + Math.sin(c.face) * 0.5, 1.25, c.z - Math.cos(c.face) * 0.5);
-  }
+  private updateCustView(v: CustView, c: Customer, dt: number, t: number): void {
+    v.rig.group.visible = true;
+    const walking = c.state === "entering" || c.state === "leaving";
+    const dx = c.x - v.prevX;
+    const dz = c.z - v.prevZ;
+    v.prevX = c.x;
+    v.prevZ = c.z;
+    if (walking && Math.hypot(dx, dz) > 1e-4) v.face = Math.atan2(dx, dz);
+    else if (!walking) v.face = 0;
+    v.rig.group.position.set(c.x, 0, c.z);
+    v.rig.update(dt, { walking, served: c.served, mood: c.mood, face: v.face, hop: c.hop });
 
-  private syncFloaters(G: GameState): void {
-    while (this.floaters.length < G.floats.length) {
-      const sp = new THREE.Sprite(new THREE.SpriteMaterial({ transparent: true, depthWrite: false, depthTest: false }));
-      this.floaters.push(sp);
-      this.scene.add(sp);
-    }
-    for (let i = 0; i < this.floaters.length; i++) {
-      const sp = this.floaters[i];
-      const fl = G.floats[i];
-      if (!fl) {
-        sp.visible = false;
-        continue;
-      }
-      sp.visible = true;
-      const mat = sp.material as THREE.SpriteMaterial;
-      const wantSig = `${fl.text}|${fl.color}`;
-      if (mat.userData.sig !== wantSig) {
-        mat.userData.sig = wantSig;
-        mat.map?.dispose();
-        mat.map = makeText(fl.text, fl.color);
-      }
-      const f = fl.t / fl.life;
-      mat.opacity = 1 - f * f;
-      const sc = (fl.big ? 1.7 : 1.2) * (1 + f * 0.3);
-      sp.scale.set(sc * 2, sc, 1);
-      sp.position.set(fl.x, 1.6 + f * 1.4, fl.z);
+    const showBubble = c.state === "seated" && !c.served;
+    v.bubble.visible = showBubble;
+    if (showBubble) {
+      const ratio = Math.max(0, Math.min(1, c.patience / c.maxPatience));
+      v.barFill.scale.x = Math.max(0.02, ratio);
+      v.barFill.position.x = -0.46 * (1 - ratio);
+      (v.barFill.material as THREE.MeshBasicMaterial).color.setRGB(
+        ratio > 0.5 ? (1 - ratio) * 2 : 1,
+        ratio > 0.5 ? 1 : ratio * 2,
+        0.3,
+      );
+      const pulse = ratio < 0.35 ? 1 + 0.09 * Math.abs(Math.sin(t * 8)) : 1;
+      v.bubble.scale.setScalar(pulse);
     }
   }
 
-  private animateDecor(dt: number): void {
-    for (const v of this.itemViews.values()) {
-      const spin = v.group.userData.spin as THREE.Object3D | undefined;
-      if (spin) {
-        const axis = (v.group.userData.spinAxis as string) ?? "z";
-        if (axis === "y") spin.rotation.y += dt * 3;
-        else spin.rotation.z += dt * 3;
-      }
-    }
-  }
-
-  private animateStations(dt: number, its: PlacedItem[]): void {
-    this.time += dt;
-    for (const it of its) {
-      const v = this.itemViews.get(it.uid);
-      if (!v?.light) continue;
-      const cooking = it.slots?.some((s) => s.filling !== null) ?? false;
-      const flick = 0.9 + Math.sin(this.time * 17 + it.uid) * 0.1;
-      // Ease gently between idle and cooking glow so dropping food on never
-      // pops a bright flash — just a soft warm-up.
-      v.light.intensity = damp(v.light.intensity, (cooking ? 0.3 : 0.16) * flick, 4, dt);
-    }
-    if (this.neonMat) {
-      const pop = Math.sin(this.time * 23) > 0.96 ? 0.7 : 0;
-      this.neonMat.emissiveIntensity = 1.5 + Math.sin(this.time * 6) * 0.25 + pop;
-    }
-  }
-
-  private syncBuild(G: GameState, input: Input): void {
-    if (!G.build.active) {
-      this.cursorTile.visible = false;
-      if (this.ghost) this.ghost.visible = false;
-      if (this.tableGhost) this.tableGhost.visible = false;
-      return;
-    }
-    // Pick hovered cell from the mouse ray against the floor.
-    const ndc = new THREE.Vector2(
-      (input.mouseX / window.innerWidth) * 2 - 1,
-      -(input.mouseY / window.innerHeight) * 2 + 1,
-    );
-    this.ray.setFromCamera(ndc, this.camera);
-    const hit = new THREE.Vector3();
-    if (this.ray.ray.intersectPlane(this.groundPlane, hit)) {
-      if (inDiningZone(hit.z)) {
-        G.build.inDining = true;
-        G.build.diningCol = clamp(diningColOf(hit.x), 0, DINING_COLS - 1);
-      } else {
-        G.build.inDining = false;
-        const { col, row } = cellOfWorld(G.grid, hit.x, hit.z);
-        G.build.cursorCol = col;
-        G.build.cursorRow = row;
-      }
-    }
-
-    // ── Arranging tables out on the dining floor ──
-    if (G.build.inDining) {
-      const tw = tableWorld(G.build.diningCol);
-      const occupied = G.tables.some((t) => t.col === G.build.diningCol);
-      const invalid = !!G.build.movingTable && occupied;
-      this.cursorTile.visible = true;
-      this.cursorTile.position.set(tw.x, 0.03, tw.z);
-      (this.cursorTile.material as THREE.MeshBasicMaterial).color.setHex(invalid ? 0xff5a5a : 0x66ff99);
-      if (this.ghost) this.ghost.visible = false;
-      if (!this.tableGhost) {
-        this.tableGhost = buildTableMesh();
-        this.tableGhost.traverse((o) => {
-          const m = (o as THREE.Mesh).material as THREE.Material | undefined;
-          if (m) {
-            m.transparent = true;
-            m.opacity = 0.5;
+  // ── Live cooking food on stations ──
+  private syncSlots(G: GameState): void {
+    const live = new Set<string>();
+    for (const st of G.stations) {
+      if (st.kind !== "cook") continue;
+      const locals = this.stationSlots.get(st.id) ?? [];
+      for (let i = 0; i < st.slots.length; i++) {
+        const slot = st.slots[i];
+        if (slot.food === null) continue;
+        const key = st.id + ":" + i;
+        live.add(key);
+        let v = this.slotViews.get(key);
+        if (!v || v.food !== slot.food) {
+          if (v) {
+            this.stage.scene.remove(v.mesh);
+            disposeTree(v.mesh);
           }
-        });
-        this.scene.add(this.tableGhost);
-      }
-      // Preview a table only where one would actually land (drop spot or new add).
-      const showGhost = !!G.build.movingTable || !occupied;
-      this.tableGhost.visible = showGhost;
-      if (showGhost) this.tableGhost.position.set(tw.x, 0.04, tw.z);
-      return;
-    }
-    if (this.tableGhost) this.tableGhost.visible = false;
-
-    const { x, z } = worldOfCell(G.grid, G.build.cursorCol, G.build.cursorRow);
-    const occupied = !!G.grid.cells[G.build.cursorRow * G.grid.cols + G.build.cursorCol]?.item;
-    this.cursorTile.visible = true;
-    this.cursorTile.position.set(x, 0.03, z);
-    (this.cursorTile.material as THREE.MeshBasicMaterial).color.setHex(occupied ? 0xff5a5a : 0x66ff99);
-
-    // Ghost preview of the brush / moving item.
-    const previewId = G.build.movingItem?.defId ?? G.build.brush;
-    if (previewId !== this.ghostSig) {
-      this.ghostSig = previewId ?? "";
-      if (this.ghost) {
-        this.scene.remove(this.ghost);
-        disposeTree(this.ghost);
-      }
-      this.ghost = null;
-      if (previewId) {
-        const d = def(previewId);
-        this.ghost = d?.category === "decor" ? buildDecor(previewId) : buildStation(previewId);
-        this.ghost.traverse((o) => {
-          const m = (o as THREE.Mesh).material as THREE.Material | undefined;
-          if (m) {
-            m.transparent = true;
-            m.opacity = 0.55;
-          }
-        });
-        this.scene.add(this.ghost);
+          const mesh = buildCookingFood(slot.food);
+          this.stage.scene.add(mesh);
+          v = { mesh, food: slot.food };
+          this.slotViews.set(key, v);
+        }
+        const local = locals[i] ?? new THREE.Vector3(0, 1.3, 0);
+        v.mesh.position.set(st.x + local.x, local.y, st.z + local.z);
+        tintCooking(v.mesh, slot);
+        const pop = Math.min(1, slot.pop);
+        v.mesh.scale.setScalar(0.5 + 0.5 * pop);
+        if (this.flips(st)) {
+          const phase = (slot.t * 0.42) % 1;
+          v.mesh.rotation.x = phase < 0.12 ? Math.sin((phase / 0.12) * Math.PI) * 2 * Math.PI : 0;
+        }
       }
     }
-    if (this.ghost) {
-      this.ghost.visible = true;
-      this.ghost.position.set(x, 0.05, z);
-      this.ghost.rotation.y = (G.build.rot * Math.PI) / 2;
+    for (const [key, v] of this.slotViews) {
+      if (!live.has(key)) {
+        this.stage.scene.remove(v.mesh);
+        disposeTree(v.mesh);
+        this.slotViews.delete(key);
+      }
+    }
+  }
+
+  private flips(st: Station): boolean {
+    return st.id === "grill" || st.id === "hotgrill";
+  }
+
+  // ── Wayfinder beacon — the single "go here" marker (ring + bobbing icon + arrow) ──
+  private syncBeacon(G: GameState): void {
+    const g = G.guide;
+    const dist = Math.hypot(G.chef.x - g.x, G.chef.z - g.z);
+    const show = g.active && G.phase === "playing" && dist > 1.8;
+    this.beacon.visible = show;
+    if (!show) return;
+    this.beacon.position.set(g.x, 0, g.z);
+    this.beaconIcon.position.y = 3.3 + Math.abs(Math.sin(G.t * 4)) * 0.3;
+    const icon = g.icon || "✨";
+    if (icon !== this.beaconIconStr) {
+      this.beaconIconStr = icon;
+      (this.beaconIcon.material as THREE.SpriteMaterial).map = this.getIconTex(icon);
+      (this.beaconIcon.material as THREE.SpriteMaterial).needsUpdate = true;
     }
   }
 }
-
-// ── Helpers ────────────────────────────────────────────────────────────────
-
-interface SlotMeshSpec {
-  sig: string;
-  build: () => THREE.Group;
-  motion: SlotMotion;
-  cook?: "patty" | "fries";
-}
-
-/** Which mesh a cooking slot shows. Grills/fryers use a single persistent
- *  "cooking" mesh (stable sig) that the renderer tints each frame, so food sears
- *  smoothly instead of snapping between discrete quality meshes. */
-function slotMeshSpec(kind: string, slot: CookSlot): SlotMeshSpec {
-  if (kind === "grill") {
-    if (pullQuality(slot) === "burnt") return { sig: "burnt", build: () => buildFood("burnt"), motion: "bob" };
-    return { sig: "patty_cook", build: buildCookingPatty, motion: "flip", cook: "patty" };
-  }
-  if (kind === "fryer") return { sig: "fries_cook", build: buildCookingFries, motion: "shake", cook: "fries" };
-  return { sig: "soda", build: () => buildFood("soda"), motion: "bob" };
-}
-
-// Cooking colour ramps (module-level so tinting allocates nothing per frame).
-const _rawPatty = new THREE.Color(0xe0697b);
-const _searedPatty = new THREE.Color(0x7a4a2a);
-const _charPatty = new THREE.Color(0x35200f);
-const _paleFries = new THREE.Color(0xe8d9a0);
-const _goldFries = new THREE.Color(0xe6a634);
-const _deepFries = new THREE.Color(0xc6862a);
-
-interface PattyCookMats { body: THREE.MeshStandardMaterial; sear: THREE.MeshStandardMaterial; sheen: THREE.MeshStandardMaterial; }
-interface FriesCookMats { fries: THREE.MeshStandardMaterial; sheen: THREE.MeshStandardMaterial; }
-
-/** Brown the patty as it sears, fade in the crust marks, and bloom a glossy
- *  sheen + warm glow through the perfect window. */
-function tintCookingPatty(g: THREE.Group, slot: CookSlot): void {
-  const cook = g.userData.cook as PattyCookMats | undefined;
-  if (!cook) return;
-  const { t, cookT, perfT, burnT } = slot;
-  const done = clamp(t / Math.max(0.01, cookT), 0, 1);
-  const overEnd = burnT === Infinity ? perfT + 3 : burnT;
-  const over = clamp((t - perfT) / Math.max(0.01, overEnd - perfT), 0, 1);
-  cook.body.color.copy(_rawPatty).lerp(_searedPatty, done);
-  if (over > 0) cook.body.color.lerp(_charPatty, over * 0.8);
-  cook.sear.opacity = done * 0.85;
-  const pf = t >= cookT && t < perfT ? Math.sin(clamp((t - cookT) / Math.max(0.01, perfT - cookT), 0, 1) * Math.PI) : 0;
-  // A subtle juicy sheen at "perfect" — a small glossy highlight, not a glow that
-  // blooms into a flare. The browning above is the real cooking read.
-  cook.sheen.opacity = 0.32 * pf;
-  cook.sheen.emissiveIntensity = 0.12 * pf;
-  cook.body.emissiveIntensity = 0;
-}
-
-/** Brighten the fries from pale to golden as they fry; glossy sheen at golden. */
-function tintCookingFries(g: THREE.Group, slot: CookSlot): void {
-  const cook = g.userData.cook as FriesCookMats | undefined;
-  if (!cook) return;
-  const { t, cookT, perfT } = slot;
-  const done = clamp(t / Math.max(0.01, cookT), 0, 1);
-  const over = clamp((t - perfT) / 3, 0, 1); // the fryer never burns to trash
-  cook.fries.color.copy(_paleFries).lerp(_goldFries, done);
-  if (over > 0) cook.fries.color.lerp(_deepFries, over * 0.7);
-  const pf = t >= cookT && t < perfT ? Math.sin(clamp((t - cookT) / Math.max(0.01, perfT - cookT), 0, 1) * Math.PI) : 0;
-  cook.fries.emissiveIntensity = 0;
-  cook.sheen.opacity = 0.32 * pf;
-  cook.sheen.emissiveIntensity = 0.12 * pf;
-}
-
-function plateSig(parts: PlatePart[]): string {
-  return parts.map((p) => `${p.id}.${p.quality}`).join(",");
-}
-
-function carrySig(c: Carry): string {
-  if (!c) return "none";
-  if (c.kind === "ing") return `ing:${c.id}`;
-  if (c.kind === "part") return `part:${c.id}.${c.quality}`;
-  if (c.kind === "burnt") return "burnt";
-  return `plate:${plateSig(c.parts)}`;
-}
-
-function ingredientMesh(id: IngredientId): THREE.Group {
-  const fk = ING_FOOD[id];
-  if (fk) return buildFood(fk);
-  if (id === "potato") return group(sphere(0.24, stdMat(0xc8a063, { flat: true })));
-  // cup
-  return group(cyl(0.18, 0.13, 0.34, stdMat(0xdedede)));
-}
-
-function makeCarryMesh(c: Carry): THREE.Object3D | null {
-  if (!c) return null;
-  if (c.kind === "ing") return ingredientMesh(c.id);
-  if (c.kind === "part") return buildFood(c.id as FoodKind, c.quality);
-  if (c.kind === "burnt") return buildFood("burnt");
-  return buildPlate(c.parts);
-}
-
-function makeEmoji(emoji: string, scale: number): THREE.Sprite {
-  const tex = canvasTex(128, (ctx, s) => {
-    ctx.clearRect(0, 0, s, s);
-    // soft card behind the emoji
-    ctx.fillStyle = "rgba(20,22,34,0.82)";
-    ctx.beginPath();
-    ctx.arc(s / 2, s / 2, s * 0.42, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.font = `${Math.floor(s * 0.5)}px serif`;
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillText(emoji, s / 2, s / 2 + s * 0.03);
-  });
-  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false }));
-  sp.scale.set(scale, scale, scale);
-  return sp;
-}
-
-function makeText(text: string, color: string): THREE.CanvasTexture {
-  return canvasTex(256, (ctx, s) => {
-    ctx.clearRect(0, 0, s, s);
-    ctx.font = "bold 60px system-ui, sans-serif";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.lineWidth = 8;
-    ctx.strokeStyle = "rgba(0,0,0,0.7)";
-    ctx.strokeText(text, s / 2, s / 2);
-    ctx.fillStyle = color;
-    ctx.fillText(text, s / 2, s / 2);
-  });
-}
-
-// Keep RECIPES referenced for potential future order-bubble detail.
-void RECIPES;

@@ -1,29 +1,25 @@
-// Boot smoke: the game loads, reaches the title, starts a shift, renders, and
-// customers arrive — with no unexpected console errors. Saves screenshots.
-import { mkdirSync } from "node:fs";
+// Boot smoke: the page comes up, the test surface exists, quickStart reaches the
+// playing phase with a populated diner, and nothing logs a console error.
 import { withGame, finish } from "./_harness.mjs";
 
-mkdirSync("shots", { recursive: true });
-
 const fail = await withGame(async ({ page, check }) => {
-  check("boots to title", await page.evaluate(() => window.__G.phase === "title"));
-  await page.screenshot({ path: "shots/1-title.png" });
-
-  await page.evaluate(() => window.__SR.quickStart());
-  await page.waitForTimeout(300);
-  check("starts a shift", await page.evaluate(() => window.__G.phase === "playing"));
-
-  // Let the real-time rAF loop run so customers spawn + the scene renders.
-  await page.waitForTimeout(2600);
-  const r = await page.evaluate(() => ({
-    custs: window.__G.customers.length,
-    vibe: window.__G.derived.vibe,
-    day: window.__G.day,
-  }));
-  check("customers arrive", r.custs > 0, `${r.custs} present`);
-  check("decor vibe computed", r.vibe > 0, `vibe ${r.vibe.toFixed(1)}`);
-  check("on day 1", r.day === 1);
-  await page.screenshot({ path: "shots/2-playing.png" });
+  const r = await page.evaluate(() => {
+    const SR = window.__SR, G = window.__G;
+    const out = { phase0: G.phase };
+    SR.quickStart();
+    out.playing = G.phase === "playing";
+    out.stations = G.stations.length;
+    out.tables = G.tables.length;
+    out.day = G.day;
+    out.hasGrill = !!G.stations.find((s) => s.id === "grill");
+    return out;
+  });
+  check("starts on the title screen", r.phase0 === "title", `phase=${r.phase0}`);
+  check("quickStart reaches playing", r.playing);
+  check("diner has stations", r.stations >= 8, `n=${r.stations}`);
+  check("diner has tables", r.tables >= 4, `n=${r.tables}`);
+  check("a grill exists", r.hasGrill);
+  check("starts on day 1", r.day === 1);
 });
 
 finish("BOOT", fail);

@@ -1,383 +1,400 @@
-// Central type model. Pure type declarations — no runtime, no imports — so any
-// module (game logic, render, ui, tests) can depend on it without cycles.
+// Pure type declarations for Sizzle Rush (kid edition). No runtime, no imports —
+// every system can depend on this file without creating an import cycle. The
+// whole game is one mutable `GameState` (G) that plain-function systems read and
+// write; render/audio are reached only through interfaces (see ctx.ts).
 
-// ─── Ingredients, parts, food ────────────────────────────────────────────────
+// ── Core enums ───────────────────────────────────────────────────────────────
 
-/** Raw items dispensed from bins. */
-export type IngredientId =
-  | "bun"
-  | "patty_raw"
+export type Phase =
+  | "title" // main menu
+  | "cutscene" // a story cinematic is playing over the diner
+  | "setup" // first-time studio: name + menu + looks + layout (after the tutorial)
+  | "playing" // a cooking shift
+  | "dayComplete" // celebration + stars
+  | "manage" // between-day: rearrange, recolour, pick an upgrade
+  | "treat" // (legacy) pick one of three upgrade "treats" — folded into manage
+  | "win"; // final celebration
+
+/** How well a cooked item turned out. Kid-forgiving: "good" is always fine. */
+export type Quality = "good" | "perfect" | "crispy" | "burnt";
+
+/** Every food a customer can order. */
+export type FoodId = "burger" | "fries" | "drink" | "icecream" | "hotdog";
+
+/** Which animal friend wanders the diner (chosen + recoloured at setup). */
+export type PetKind = "corgi" | "cat" | "bunny";
+
+/** Stable ids for the hand-placed stations in the diner. */
+export type StationId =
+  | "meat"
+  | "grill"
   | "potato"
-  | "cheese"
-  | "lettuce"
-  | "tomato"
-  | "cup";
+  | "fryer"
+  | "soda"
+  | "icecream"
+  | "sausage"
+  | "hotgrill"
+  | "trash";
 
-/** Components that can sit on a plate. */
-export type PartId =
-  | "bun"
-  | "patty"
-  | "fries"
-  | "cheese"
-  | "lettuce"
-  | "tomato"
-  | "soda";
+/** Station roles. A "source" hands out an ingredient; a "cook" transforms it. */
+export type StationKind = "source" | "cook" | "instant" | "trash";
 
-export type Quality = "perfect" | "good" | "overdone";
+// ── The thing in the chef's hands (carry one item, or nothing) ───────────────
 
-export interface PlatePart {
-  id: PartId;
-  quality: Quality;
-}
-
-/** What the chef's hands hold. Exactly one item at a time. */
 export type Carry =
-  | { kind: "ing"; id: IngredientId }
-  | { kind: "part"; id: PartId; quality: Quality }
-  | { kind: "plate"; parts: PlatePart[] }
-  | { kind: "burnt" }
-  | null;
+  | null
+  | { kind: "raw"; food: FoodId } // uncooked ingredient headed for a cook station
+  | { kind: "ready"; food: FoodId; quality: Quality } // done, ready to serve
+  | { kind: "burnt" }; // oops — toss it in the bin
 
-// ─── Recipes ─────────────────────────────────────────────────────────────────
+// ── Data definitions (catalog.ts) ────────────────────────────────────────────
 
-export interface Recipe {
-  id: string;
+export interface FoodDef {
+  id: FoodId;
   name: string;
-  /** Multiset of parts required (order irrelevant; matched as a sorted key). */
-  parts: PartId[];
-  basePrice: number;
-  /** Minimum day before this recipe can appear (also gated by shop unlock). */
+  icon: string; // big emoji shown in order bubbles + HUD
+  /** Station that dispenses the raw/ready item for this food. */
+  source: StationId;
+  /** Cook station this raw item goes onto, or null for instant foods. */
+  cook: StationId | null;
+  /** Day this food first appears on the menu. */
   minDay: number;
-  weight: number;
-  /** Emoji shown in the order bubble / menus. */
-  icon: string;
-  /** Whether the recipe is unlocked for this run (shop purchase). */
-  unlocked?: boolean;
+  /** Cute name for the raw ingredient ("a patty", "a potato"). */
+  rawName: string;
+  color: number; // base tint for the cooked food mesh
+  rawColor: number; // tint while raw / cooking start
 }
 
-// ─── Catalog (placeable stations + decor) ────────────────────────────────────
-
-export type StationKind = "grill" | "fryer" | "prep" | "bin" | "drink" | "trash";
-export type Category = "station" | "decor";
-
-/** Bonus a decor item projects onto an ADJACENT functional station. */
-export interface AdjBonus {
-  to: StationKind[];
-  cookSpeedMult?: number; // multiplies neighbour cook speed
-  slots?: number; // +N slots on neighbour
-}
-
-/** Global pools every placed copy contributes to (scaled by front-of-house
- *  proximity for vibe-flavoured stats). */
-export interface GlobalBonus {
-  vibe?: number; // restaurant ambience points
-  patienceMult?: number; // customers wait longer
-  tipFlat?: number; // +coins per serve
-  comboWindow?: number; // +seconds before combo decays
-  moveSpeedMult?: number; // chef speed
-  perfectWindow?: number; // +seconds on cook perfect windows
-  repGainMult?: number; // reputation gained per good serve
-}
-
-export interface CatalogDef {
-  id: string;
+export interface StationDef {
+  id: StationId;
   name: string;
-  category: Category;
-  /** For stations: their function. */
-  kind?: StationKind;
-  /** For bins: which ingredient they dispense. */
-  ingredient?: IngredientId;
-  /** Cook/fry/drink stations: number of simultaneous slots. */
-  slots?: number;
-  /** Coins to buy from the shop. */
-  cost: number;
-  /** Does it block chef movement / other placement on its cell? */
-  solid: boolean;
-  /** Short description for shop + build tooltips. */
-  desc: string;
-  /** Adjacency projection (decor). */
-  adj?: AdjBonus;
-  /** Global pool contribution (decor, some stations). */
-  global?: GlobalBonus;
-  /** Tint used by procedural mesh + UI swatch (hex). */
-  color: number;
-  /** Emoji used in shop / palette. */
+  kind: StationKind;
   icon: string;
+  color: number;
+  gives?: FoodId; // source/instant: food dispensed here
+  cooks?: FoodId[]; // cook: foods accepted here
+  slots: number; // cook stations only
 }
 
-// ─── Floor-plan grid ─────────────────────────────────────────────────────────
+// ── Live instances (state.ts) ────────────────────────────────────────────────
 
 export interface CookSlot {
-  /** Source ingredient currently cooking, or null if empty. */
-  filling: IngredientId | null;
-  t: number; // elapsed cook time
-  cookT: number; // → ready
-  perfT: number; // perfect window end
-  burnT: number; // burnt threshold (Infinity for fryer)
-  done: boolean;
+  food: FoodId | null; // what's cooking, or null = empty
+  t: number; // seconds since placed
+  readyT: number; // becomes edible at this time
+  goldenT: number; // start of the perfect window
+  crispT: number; // past golden → "crispy" (still ok)
+  burnT: number; // past this → burnt (rare; Infinity if it can't burn)
+  pop: number; // placement squash-stretch timer
 }
 
-export interface PlacedItem {
-  uid: number;
-  defId: string;
-  col: number;
-  row: number;
-  rot: number; // 0..3 quarter turns (visual only)
-  /** Cook stations: live slots. */
-  slots?: CookSlot[];
-  /** Prep counters: the plate currently being assembled on this counter. */
-  plate?: PlatePart[];
-  // Adjacency-derived effective values, recomputed by adjacency.ts:
-  effCookSpeed: number; // multiplier vs base
-  effSlots: number; // resolved slot count
+export interface Station {
+  id: StationId;
+  kind: StationKind;
+  x: number;
+  z: number;
+  ry: number; // facing
+  slots: CookSlot[]; // cook stations
 }
 
-export interface Cell {
-  col: number;
-  row: number;
-  item: PlacedItem | null;
+export type CustomerState = "entering" | "seated" | "leaving";
+
+export interface CustomerLook {
+  body: number; // body color
+  hair: number;
+  hat: boolean;
+  hue: number; // 0..1 used to stagger animation phase
 }
-
-/** A dining table the player can place/move along the dining row. */
-export interface TableInst {
-  uid: number;
-  col: number; // dining-row column index (0..DINING_COLS-1)
-}
-
-export interface Grid {
-  cols: number;
-  rows: number;
-  cells: Cell[]; // row-major: cells[row * cols + col]
-}
-
-// ─── Customers ───────────────────────────────────────────────────────────────
-
-export type CustomerState = "walkin" | "waiting" | "served" | "leaving";
-
-/** normal · vip (big pay, impatient) · critic (huge reputation swing). */
-export type CustomerKind = "normal" | "vip" | "critic";
 
 export interface Customer {
   uid: number;
-  recipe: Recipe;
-  kind: CustomerKind;
-  payMult: number; // coin payout multiplier for this guest
-  repMult: number; // reputation swing multiplier (serve + walkout)
-  spot: number; // counter slot index
-  x: number; // world position
-  z: number;
-  state: CustomerState;
-  patience: number; // remaining seconds (counts down only while waiting)
-  maxPatience: number;
-  anger: number; // 0..1 visual fume
-  servedT: number; // time spent in served animation
-  happy: boolean; // served (true) vs stormed off (false)
-  look: CustomerLook;
-  bob: number; // idle animation phase
-  face: number; // heading (radians) — faces the walk direction, or the camera when seated
-  walk: number; // gait phase, advanced while walking in / leaving
-}
-
-export interface CustomerLook {
-  skin: number;
-  shirt: number;
-  hair: number;
-  hat: boolean;
-}
-
-// ─── Helper (sous-chef) ──────────────────────────────────────────────────────
-
-export interface Helper {
-  hired: boolean;
-  level: number; // 1..3 — faster reactions / wider reach
-  wage: number; // deducted at day end
+  order: FoodId;
+  table: number; // index into G.tables
   x: number;
   z: number;
-  targetUid: number | null; // station slot it's heading to tend
-  cooldown: number;
+  state: CustomerState;
+  patience: number; // seconds left before they give up
+  maxPatience: number;
+  served: boolean;
+  servedT: number; // celebration timer after being served
+  mood: number; // 0 sad .. 1 happy, eased toward patience ratio
+  hop: number; // happy-hop timer
+  look: CustomerLook;
 }
 
-// ─── Derived (recomputed) global modifiers ───────────────────────────────────
-
-export interface Mods {
-  // Base run mods (mutated by upgrades).
-  moveSpeed: number;
-  cookSpeed: number;
-  patience: number;
-  perfectWindow: number;
-  tip: number;
-  comboWindow: number;
-  repGain: number;
+export interface Table {
+  x: number;
+  z: number;
+  seatX: number; // where the customer sits
+  seatZ: number;
+  occupied: number; // customer uid, or 0
 }
 
-/** Fully-resolved knobs the sim reads each frame: base mods × decor × pricing ×
- *  reputation. Recomputed by adjacency.ts whenever layout/pricing/rep change. */
+// ── Pet (a corgi!) — wanders the diner; the chef can pet + feed it ───────────
+
+export interface Pet {
+  kind: PetKind;
+  x: number;
+  z: number;
+  vx: number;
+  vz: number;
+  tx: number; // wander target
+  tz: number;
+  retargetT: number;
+  happy: number; // 0..1
+  wag: number; // animation phase
+  followT: number; // follows the chef after being petted/fed
+  hop: number; // happy hop timer
+  barkT: number; // bark cooldown
+}
+
+// ── Garden — planters that grow over the run ─────────────────────────────────
+
+export interface Plant {
+  x: number;
+  z: number;
+  kind: number; // which flower (colour/shape)
+  growth: number; // 0..1 within the current stage; whole = stage progress
+  stage: number; // 0 seed .. 4 bloom
+}
+
+// ── Chef ─────────────────────────────────────────────────────────────────────
+
+export interface Chef {
+  x: number;
+  z: number;
+  facing: number; // radians
+  vx: number;
+  vz: number;
+  carry: Carry;
+  dashT: number; // remaining dash time
+  dashCd: number; // dash cooldown
+  cookT: number; // cook/serve arm-pump animation pulse
+  cheer: number; // happy bounce after a serve
+}
+
+// ── Cutscenes (data-driven cinematic; see cutscene.ts + render/cineView) ─────
+
+export type Vec3 = [number, number, number];
+export interface Pose {
+  pos: Vec3;
+  look: Vec3;
+}
+
+/** One member of the cutscene cast, placed by data (interpreted by render). */
+export interface CastPlacement {
+  who: "pip" | "grandma" | "guest";
+  x: number;
+  y: number;
+  z: number;
+  ry?: number;
+  color?: number;
+  vz?: number; // per-shot stroll velocity
+}
+
+export interface Shot {
+  dur: number;
+  from: Pose;
+  to?: Pose;
+  fov?: number;
+  focus?: Vec3; // depth-of-field rack target
+  bokeh?: number; // blur strength
+  handheld?: number; // 0 locked .. 1 normal camera life
+  line?: { who: string; portrait: string; text: string; color?: string };
+  title?: { text: string; sub?: string };
+  fade?: "fromBlack" | "toBlack";
+  flash?: boolean;
+  shake?: number;
+  sfx?: string;
+}
+
+export interface CineScene {
+  shots: Shot[];
+  cast?: CastPlacement[];
+  warm?: boolean; // tint lights warm/golden for the scene
+  music?: "story" | "win";
+}
+
+export interface CutsceneState {
+  scene: CineScene;
+  shotIndex: number;
+  elapsed: number; // seconds into the current shot
+  typed: number; // typewriter character count for the current line
+  started: boolean; // has the current shot's onEnter fired yet
+  guard: number; // input guard so the launching click doesn't skip
+  label: string;
+  onDone: () => void;
+}
+
+// ── Treats (between-day upgrades; upgrades.ts) ────────────────────────────────
+
+export type TreatId =
+  | "fast"
+  | "reach"
+  | "time"
+  | "sparkle"
+  | "helper"
+  | "patient"
+  | "quickcook"
+  | "extracustomer"
+  | "table" // a new dining table — more guests can sit at once
+  | "decor"; // decorations — each happy guest is worth more score
+
+export interface TreatDef {
+  id: TreatId;
+  name: string;
+  icon: string;
+  blurb: string;
+}
+
+// ── Derived knobs (recomputed from chosen treats) ────────────────────────────
+
 export interface Derived {
   moveSpeed: number;
-  patience: number; // multiplier
-  perfectWindow: number; // +seconds
-  tip: number; // +coins flat
-  comboWindow: number; // seconds
-  repGainMult: number;
-  vibe: number; // 0..100-ish ambience score
-  spawnMult: number; // customer arrival rate multiplier
+  reachMult: number;
+  levelTime: number;
+  cookSpeedMult: number;
+  patienceMult: number;
+  coinMult: number; // decorations make each happy guest worth more score
+  sparkle: boolean; // every serve bursts extra confetti + keeps combo alive
+  helper: boolean; // cook stations auto-hold at perfect (never burn)
 }
 
-// ─── Top-level game state ────────────────────────────────────────────────────
+// ── Restaurant customization (chosen at setup, tweaked between days) ──────────
+// Every part of the diner can be recoloured. Defaults (customize.ts) reproduce
+// the original look exactly, so a fresh config is a no-op visually.
 
-export type Phase =
-  | "title"
-  | "cutscene"
-  | "playing"
-  | "dayEnd"
-  | "manage"
-  | "build"
-  | "gameOver"
-  | "win";
-
-/** One line of dialogue in a cutscene. */
-export interface Beat {
-  speaker: string;
-  portrait: string; // emoji
-  text: string;
-  color?: string; // name-plate accent
+export interface ChefLook {
+  apron: number;
+  accent: number; // scarf / ties / shoes
+  skin: number;
+  hat: number;
+  hair: number;
 }
 
-export interface Cutscene {
-  beats: Beat[];
-  index: number;
-  typed: number; // typewriter progress (chars, fractional)
-  onDone: () => void;
-  label: string; // e.g. "Night 1"
+export interface PetLook {
+  kind: PetKind;
+  body: number;
+  belly: number; // belly / cream markings
+  accent: number; // ears / collar / inner
 }
 
-/** Brief "Night N — theme" title card shown at the start of a shift. */
+export interface DinerPalette {
+  wall: number;
+  floorA: number; // checker tile A
+  floorB: number; // checker tile B
+  stripe: number; // accent stripe on the back wall
+  window: number; // sky in the windows
+}
+
+export interface TableStyle {
+  top: number;
+  rim: number;
+  leg: number; // post + foot
+  chair: number;
+}
+
+export interface StationStyle {
+  body: number; // equipment cabinet tint
+  trim: number; // bezel / accent
+}
+
+/** One planter's chosen flower (type + bloom colour). */
+export interface PlantStyle {
+  kind: number; // flower shape/type
+  bloom: number; // bloom colour
+}
+
+export interface RestaurantConfig {
+  name: string;
+  menu: FoodId[]; // which unlocked foods this diner serves
+  tableCount: number; // how many tables are out (upgradeable)
+  decorLevel: number; // decorations owned → score per guest
+  chef: ChefLook;
+  pet: PetLook;
+  palette: DinerPalette;
+  table: TableStyle;
+  station: StationStyle;
+  plants: PlantStyle[]; // per-planter
+}
+
+// ── The whole game state ─────────────────────────────────────────────────────
+
 export interface DayCard {
   title: string;
   sub: string;
   t: number;
 }
 
-export interface Chef {
-  x: number;
-  z: number;
-  vx: number;
-  vz: number;
-  face: number; // heading angle (radians)
-  walk: number; // gait phase
-  interactCD: number; // debounce on the interact key
-  cookT: number; // >0 = playing a hands-on cook/chop action (drives the rig arm-pump)
-  fire: number; // 0..1 on-fire glow (combo)
-  dashT: number; // remaining dash time (>0 = dashing)
-  dashCD: number; // dash cooldown remaining
-  dashX: number; // locked dash direction
-  dashZ: number;
-}
-
-/** A one-day twist (Happy Hour, Dinner Rush, …). Data in game/modifiers.ts. */
-export interface DayModifier {
-  id: string;
-  name: string;
-  desc: string;
-  icon: string;
-  patienceMult?: number;
-  spawnMult?: number;
-  tipAdd?: number;
-  tipMult?: number;
-  perfectMult?: number;
-  payMult?: number;
-  vipBoost?: number; // extra VIP spawn chance
-}
-
-export interface RunStats {
-  served: number;
-  perfect: number;
-  expired: number;
-  trashed: number;
-  bestCombo: number;
-}
-
-export interface FloatText {
-  text: string;
-  x: number;
-  z: number;
-  t: number;
-  life: number;
-  color: string;
-  big: boolean;
-}
-
 export interface GameState {
   phase: Phase;
-  prevPhase: Phase;
-  t: number; // total elapsed
+  t: number; // global clock
   paused: boolean;
-  seed: number;
 
-  day: number; // 1..TOTAL_DAYS
-  dayTime: number; // seconds remaining in the shift
-  quota: number;
-  coins: number; // bank (persists across days in a run)
-  dayCoins: number; // earned this shift (vs quota)
-  lastDayPassed: boolean;
-  modifier: DayModifier | null; // today's twist
-  dayStars: number; // 0..3 rating for the last completed day
-
-  rep: number; // reputation 0..100
-  priceLevel: number; // 0..N index into PRICE_LEVELS
-  combo: number;
-  comboTimer: number;
-
-  mods: Mods;
-  derived: Derived;
-  upgrades: Record<string, number>; // upgrade id → stacks owned
-
-  grid: Grid;
-  /** Dining tables, arrangeable in build mode (drives seating + collision). */
-  tables: TableInst[];
-  /** Owned-but-unplaced items available in build mode (counts by defId). */
-  inventory: Record<string, number>;
-  recipes: Recipe[]; // run's recipe pool (unlocked flags vary)
-  helper: Helper;
+  day: number; // 1-based current day
+  maxDay: number;
 
   chef: Chef;
+  stations: Station[];
+  tables: Table[];
   customers: Customer[];
-  carry: Carry;
+  pet: Pet;
+  plants: Plant[];
+
+  // shift timing / goals
+  dayTime: number; // seconds left in the shift
+  dayLen: number; // shift length (for the bar)
+  goal: number; // happy guests needed for 3 stars
+  servedToday: number;
+  happyToday: number; // served before they got too sad
   spawnTimer: number;
+  spawnQueue: number; // guests still to arrive this shift
+  spawnGap: number; // seconds between arrivals this shift
+  nextUid: number;
 
-  stats: RunStats;
-  dayStats: { served: number; perfect: number; expired: number }; // reset each shift
-  floats: FloatText[];
+  // score / feel
+  coins: number; // friendly score number
+  combo: number;
+  comboT: number; // time left before the combo cools
+  bestCombo: number;
+  fire: number; // 0..1 "on a roll" glow
 
-  // UI scratch
-  hint: string; // current SPACE action label
-  build: BuildState;
-  manageTab: "shop" | "pricing" | "upgrades" | "build";
-  shopOffer: string[]; // catalog ids offered this visit
-  upgradeOffer: string[]; // upgrade ids offered this visit
-  toast: { text: string; t: number } | null;
-  cutscene: Cutscene | null;
+  // treats / upgrades
+  treats: TreatId[]; // chosen so far
+  treatChoices: TreatId[]; // the 3 currently offered
+  derived: Derived;
+
+  // the player's restaurant (name, menu, looks, colours, layout)
+  config: RestaurantConfig;
+  // content unlocked across all runs (food/pet/decor keys) — gates setup/manage
+  unlocks: string[];
+
+  // tutorial — a slow, guided first shift before the real game begins
+  tutorial: boolean; // this shift is the guided tutorial (does not count)
+  tutorialStep: number; // 0.. which guided step the kid is on
+  tutorialServed: number; // serves completed during the tutorial
+  newUnlocks: string[]; // content keys unlocked by the day just finished (toast)
+
+  // story / flow
+  cutscene: CutsceneState | null;
   dayCard: DayCard | null;
+  stars: number; // stars earned on the most recent day
+
+  // wayfinder (recomputed each frame): where to go + what to do next. Drives a
+  // single 3D beacon (ring + bobbing icon) at the target.
+  guide: { x: number; z: number; label: string; icon: string; active: boolean };
+  // the immediate one-button action when standing next to something
+  prompt: { label: string; icon: string } | null;
+  // what the setup/manage live preview should frame while customizing: the
+  // characters (chef + pet close-up) or the whole diner room.
+  studioFocus: "chef" | "room";
+  // which customizer category the studio opens on (lets debug scenarios + the UI
+  // agree on the open section, e.g. "diner" for a room-focused cut).
+  studioCat: string;
+
+  // settings (persisted)
   muted: boolean;
   quality: "high" | "low";
-  tutorial: number; // current tutorial step, or -1 when inactive/done
-}
 
-export interface BuildState {
-  active: boolean;
-  /** defId being placed from the palette, or null when moving/idle. */
-  brush: string | null;
-  cursorCol: number;
-  cursorRow: number;
-  rot: number;
-  /** uid of a placed item picked up for moving. */
-  movingUid: number | null;
-  /** The lifted item while moving (off-grid until dropped). */
-  movingItem?: PlacedItem | null;
-  /** Dining-area cursor: when the mouse is over the dining floor, the build
-   *  cursor snaps to a table column instead of a kitchen cell. */
-  inDining: boolean;
-  diningCol: number;
-  /** A table lifted for moving (off the floor until dropped). */
-  movingTable?: TableInst | null;
+  rngSeed: number;
 }

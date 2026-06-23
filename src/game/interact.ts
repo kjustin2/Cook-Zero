@@ -1,49 +1,52 @@
-// Context-sensitive interaction. actionFor() returns the single best {label,run}
-// for whatever the chef is standing next to — the label doubles as the on-screen
-// SPACE hint. run() performs the action (mutating G, emitting fx/sfx).
+// Context-sensitive interaction — the single most kid-friendly mechanic. One
+// button (SPACE/ENTER) does everything: actionFor() looks at where the chef is
+// standing and what's in their hands, then returns ONE {label, icon, run} for
+// the best thing to do. The label + icon drive the big on-screen button.
 
-import type { Carry, Customer, PlatePart } from "./types";
+import type { FoodId, Quality, Station } from "./types";
 import type { Ctx } from "./ctx";
-import { COOK_SPECS, PREP_DIRECT, def, partsKey } from "./catalog";
-import { worldOfCell, items } from "./grid";
-import { clearSlot, freeSlot, pullQuality, startSlot } from "./cooking";
+import { food, stationDef } from "./catalog";
+import { clearSlot, freeSlot, slotQuality, startCooking } from "./stations";
 import { serveCustomer } from "./serving";
+import { petPet, feedPet } from "./pet";
+import { waterPlant, MAX_STAGE } from "./garden";
+import { CHEF_REACH } from "./balance";
 import { dist } from "../core/math";
-import { SERVE_REACH } from "./dining";
 
 export interface Action {
   label: string;
+  icon: string;
   run(): void;
+  cooks?: boolean; // triggers the chef's cook arm-pump
 }
 
-const REACH = 2.55;
-const COOK_PULSE = 0.42; // how long the chef plays a cook/chop arm-pump
+const QPRIO: Record<Quality | "raw", number> = { perfect: 4, good: 3, crispy: 2, burnt: 1, raw: 0 };
 
-const PART_LABEL: Record<string, string> = {
-  patty: "patty",
-  fries: "fries",
-  soda: "soda",
-  bun: "bun",
-  cheese: "cheese",
-  lettuce: "lettuce",
-  tomato: "tomato",
-};
-
-const carryPlate = (c: Carry): PlatePart[] | null => (c && c.kind === "plate" ? c.parts : null);
-
-function plateMatches(parts: PlatePart[], wantedKey: string): boolean {
-  return partsKey(parts.map((p) => p.id)) === wantedKey;
+/** Best slot to take from a cook station: prefer perfect, then good, etc. */
+function bestSlot(st: Station): { idx: number; q: Quality } | null {
+  let best = -1;
+  let bestQ: Quality | "raw" = "raw";
+  for (let i = 0; i < st.slots.length; i++) {
+    const q = slotQuality(st.slots[i]);
+    if (q === "raw") continue;
+    if (QPRIO[q] > QPRIO[bestQ]) {
+      bestQ = q;
+      best = i;
+    }
+  }
+  return best >= 0 && bestQ !== "raw" ? { idx: best, q: bestQ } : null;
 }
 
 /** The best action for the chef's current position + carry, or null. */
 export function actionFor(ctx: Ctx): Action | null {
   const { G } = ctx;
   const chef = G.chef;
+  const reach = CHEF_REACH * G.derived.reachMult;
 
   let best: Action | null = null;
   let bestDist = Infinity;
   const consider = (d: number, make: () => Action | null) => {
-    if (d >= bestDist || d > REACH) return;
+    if (d >= bestDist || d > reach) return;
     const a = make();
     if (a) {
       best = a;
@@ -51,194 +54,128 @@ export function actionFor(ctx: Ctx): Action | null {
     }
   };
 
-  // ── Table service: serve a seated guest you're standing next to ──
-  const plate = carryPlate(G.carry);
-  if (plate) {
-    let cust: Customer | null = null;
-    let cd = SERVE_REACH;
-    for (const c of G.customers) {
-      if (c.state !== "waiting") continue;
-      const d = dist(chef.x, chef.z, c.x, c.z);
-      if (d < cd) {
-        cd = d;
-        cust = c;
-      }
-    }
-    if (cust) {
-      const target = cust;
-      const matches = plateMatches(plate, partsKey(target.recipe.parts));
-      consider(0.5, () =>
-        matches
-          ? {
-              label: `Serve ${target.recipe.name}`,
-              run: () => {
-                serveCustomer(ctx, target, plate);
-                G.carry = null;
-              },
-            }
-          : {
-              label: "✗ Wrong order",
-              run: () => ctx.sfx.error(),
-            },
-      );
+  const carry = chef.carry;
+
+  // ── Serve a seated guest you're standing next to (matching order) ──
+  if (carry && carry.kind === "ready") {
+    const heldFood = carry.food;
+    const quality = carry.quality;
+    for (const cust of G.customers) {
+      if (cust.state !== "seated" || cust.served || cust.order !== heldFood) continue;
+      const d = dist(chef.x, chef.z, cust.x, cust.z);
+      consider(d, () => ({
+        label: "Serve!",
+        icon: food(heldFood).icon,
+        run: () => {
+          serveCustomer(ctx, cust, heldFood, quality);
+          chef.carry = null;
+        },
+      }));
     }
   }
 
-  // ── Grid stations ──
-  for (const item of items(G.grid)) {
-    const d = def(item.defId);
-    if (!d || d.category !== "station") continue;
-    const { x, z } = worldOfCell(G.grid, item.col, item.row);
-    const dd = dist(chef.x, chef.z, x, z);
-    if (dd > REACH) continue;
+  // ── Stations ──
+  for (const st of G.stations) {
+    const d = dist(chef.x, chef.z, st.x, st.z);
+    if (d > reach) continue;
+    const def = stationDef(st.id);
 
-    if (d.kind === "bin" && d.ingredient) {
-      if (G.carry === null) {
-        const ing = d.ingredient;
-        consider(dd, () => ({
-          label: `Grab ${d.name.replace(/ (Bin|Fridge|Crate)$/, "")}`,
+    if (st.kind === "source" && def.gives && carry === null) {
+      const give = def.gives;
+      consider(d, () => ({
+        label: `Grab ${food(give).rawName}`,
+        icon: food(give).icon,
+        run: () => {
+          chef.carry = { kind: "raw", food: give };
+          ctx.sfx.grab();
+        },
+      }));
+    } else if (st.kind === "instant" && def.gives && carry === null) {
+      const give = def.gives;
+      consider(d, () => ({
+        label: `Grab ${food(give).name}`,
+        icon: food(give).icon,
+        cooks: true,
+        run: () => {
+          chef.carry = { kind: "ready", food: give, quality: "good" };
+          if (give === "drink") ctx.sfx.pour();
+          else ctx.sfx.scoop();
+        },
+      }));
+    } else if (st.kind === "cook") {
+      // Place a raw item this grill accepts.
+      if (carry && carry.kind === "raw" && def.cooks?.includes(carry.food) && freeSlot(st) >= 0) {
+        const f = carry.food;
+        consider(d, () => ({
+          label: "Cook it!",
+          icon: "🔥",
+          cooks: true,
           run: () => {
-            G.carry = { kind: "ing", id: ing };
-            ctx.sfx.grab();
-            ctx.fx.burst(x, z, d.color, 3);
-          },
-        }));
-      }
-    } else if (d.kind === "trash") {
-      if (G.carry !== null) {
-        consider(dd, () => ({
-          label: "Trash item",
-          run: () => {
-            if (G.carry && G.carry.kind === "burnt") G.stats.trashed++;
-            G.carry = null;
-            ctx.sfx.error();
-            ctx.fx.smoke(x, z);
-          },
-        }));
-      }
-    } else if (d.kind === "grill" || d.kind === "fryer") {
-      const spec = COOK_SPECS[d.kind]!;
-      // Place a raw input.
-      if (G.carry && G.carry.kind === "ing" && G.carry.id === spec.accepts && freeSlot(item) >= 0) {
-        consider(dd, () => ({
-          label: `Cook ${PART_LABEL[spec.part]}`,
-          run: () => {
-            const idx = freeSlot(item);
-            if (idx >= 0 && startSlot(item, idx, G.derived)) {
-              G.carry = null;
-              chef.cookT = COOK_PULSE;
+            const idx = freeSlot(st);
+            if (idx >= 0 && startCooking(st, idx, f, G.derived.cookSpeedMult)) {
+              chef.carry = null;
               ctx.sfx.place();
             }
           },
         }));
       }
       // Take a ready item.
-      if (G.carry === null && item.slots) {
-        let bi = -1;
-        for (let i = 0; i < item.slots.length; i++) {
-          const q = pullQuality(item.slots[i]);
-          if (q !== "raw") {
-            bi = i;
-            if (q === "perfect" || q === "burnt") break;
-          }
-        }
-        if (bi >= 0) {
-          const slot = item.slots[bi];
-          const q = pullQuality(slot);
-          const label =
-            q === "burnt" ? "Scrape burnt" : q === "perfect" ? `Take ${PART_LABEL[spec.part]} ✨` : `Take ${PART_LABEL[spec.part]}`;
-          consider(dd, () => ({
-            label,
+      if (carry === null) {
+        const pick = bestSlot(st);
+        if (pick) {
+          const slot = st.slots[pick.idx];
+          const f = slot.food as FoodId;
+          const q = pick.q;
+          consider(d, () => ({
+            // Burnt: picking it UP off the grill (then the wayfinder routes to the
+            // bin) — so it must NOT show the trash-can icon, which means "dispose".
+            label: q === "burnt" ? "Pick it up" : q === "perfect" ? "Take it! ✨" : "Take it!",
+            icon: q === "burnt" ? "💨" : food(f).icon,
             run: () => {
               if (q === "burnt") {
-                G.carry = { kind: "burnt" };
-                ctx.fx.smoke(x, z);
+                chef.carry = { kind: "burnt" };
+                ctx.fx.smoke(st.x, st.z);
               } else {
-                const quality = q === "perfect" ? "perfect" : "good";
-                G.carry = { kind: "part", id: spec.part, quality };
+                chef.carry = { kind: "ready", food: f, quality: q };
                 ctx.sfx.pull(q === "perfect");
-                ctx.fx.burst(x, z, q === "perfect" ? 0xffe066 : 0xffaa55, q === "perfect" ? 10 : 5);
               }
               clearSlot(slot);
             },
           }));
         }
       }
-    } else if (d.kind === "drink") {
-      // Empty-handed: take a ready soda, else start a pour.
-      if (G.carry === null && item.slots) {
-        const readyIdx = item.slots.findIndex((s) => s.filling !== null && pullQuality(s) !== "raw");
-        if (readyIdx >= 0) {
-          const slot = item.slots[readyIdx];
-          consider(dd, () => ({
-            label: "Take soda",
-            run: () => {
-              G.carry = { kind: "part", id: "soda", quality: "good" };
-              clearSlot(slot);
-              ctx.sfx.pull(false);
-            },
-          }));
-        } else if (freeSlot(item) >= 0) {
-          consider(dd, () => ({
-            label: "Pour soda",
-            run: () => {
-              const idx = freeSlot(item);
-              if (idx >= 0 && startSlot(item, idx, G.derived)) {
-                chef.cookT = COOK_PULSE;
-                ctx.sfx.place();
-              }
-            },
-          }));
-        }
+    } else if (st.kind === "trash" && carry !== null) {
+      consider(d, () => ({
+        label: "Toss it",
+        icon: "🗑️",
+        run: () => {
+          chef.carry = null;
+          ctx.sfx.toss();
+          ctx.fx.smoke(st.x, st.z);
+        },
+      }));
+    }
+  }
+
+  // ── Pet the corgi (optional fun — pet with empty hands, or feed it a dish) ──
+  {
+    const p = G.pet;
+    const d = dist(chef.x, chef.z, p.x, p.z);
+    if (d <= reach) {
+      if (carry === null) {
+        consider(d, () => ({ label: "Pet the pup", icon: "🐾", run: () => petPet(ctx) }));
+      } else if (carry.kind === "ready") {
+        consider(d, () => ({ label: "Feed the pup", icon: "🦴", run: () => feedPet(ctx) }));
       }
-    } else if (d.kind === "prep") {
-      if (!item.plate) item.plate = [];
-      const pl = item.plate;
-      // Set a carried plate down on an empty counter to hold it — leave it here,
-      // go grab another ingredient, and come back to add to it / pick it up.
-      if (G.carry && G.carry.kind === "plate" && pl.length === 0) {
-        const held = G.carry.parts;
-        consider(dd, () => ({
-          label: "Set down plate",
-          run: () => {
-            item.plate = held.slice();
-            G.carry = null;
-            ctx.sfx.place();
-          },
-        }));
-      }
-      // Add a prepped/cooked part to the plate on this counter.
-      let addable: PlatePart | null = null;
-      if (G.carry) {
-        if (G.carry.kind === "part") addable = { id: G.carry.id, quality: G.carry.quality };
-        else if (G.carry.kind === "ing" && PREP_DIRECT[G.carry.id]) {
-          addable = { id: PREP_DIRECT[G.carry.id]!, quality: "good" };
-        }
-      }
-      if (addable && pl.length < 6) {
-        const part = addable;
-        consider(dd, () => ({
-          label: pl.length === 0 ? "Start plate" : "Add to plate",
-          run: () => {
-            pl.push(part);
-            G.carry = null;
-            chef.cookT = COOK_PULSE;
-            ctx.sfx.chop();
-            ctx.fx.burst(x, z + 0.2, 0xffffff, 4);
-          },
-        }));
-      }
-      // Pick up the finished plate.
-      if (G.carry === null && pl.length > 0) {
-        consider(dd, () => ({
-          label: `Pick up plate (${pl.length})`,
-          run: () => {
-            G.carry = { kind: "plate", parts: pl.slice() };
-            item.plate = [];
-            ctx.sfx.grab();
-          },
-        }));
-      }
+    }
+  }
+
+  // ── Water a flower (optional tend — helps it bloom) ──
+  if (carry === null) {
+    for (const pl of G.plants) {
+      if (pl.stage >= MAX_STAGE) continue;
+      const d = dist(chef.x, chef.z, pl.x, pl.z);
+      consider(d, () => ({ label: "Water it", icon: "💧", run: () => waterPlant(ctx, pl) }));
     }
   }
 

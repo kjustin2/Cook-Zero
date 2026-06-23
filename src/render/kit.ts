@@ -3,8 +3,6 @@
 
 import * as THREE from "three";
 
-export const TILE = 2.3; // world units per grid cell (mirrors game/grid.ts)
-
 export interface MatOpts {
   rough?: number;
   metal?: number;
@@ -105,15 +103,23 @@ export function emojiSprite(emoji: string, scale = 1): THREE.Sprite {
 
 /** A flat, camera-facing label sprite (rounded card with text). */
 export function labelSprite(text: string, bg = "#10131c", fg = "#ffffff", scale = 1): THREE.Sprite {
-  const pad = 18;
-  const tex = canvasTex(256, (ctx, s) => {
+  const pad = 22;
+  const tex = canvasTex(512, (ctx, s) => {
     ctx.clearRect(0, 0, s, s);
-    ctx.font = "bold 44px system-ui, sans-serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
+    // Auto-shrink the font so even a long diner name always fits — never clipped.
+    let fs = 80;
+    ctx.font = `bold ${fs}px "Baloo 2", system-ui, sans-serif`;
+    const maxW = s - pad * 2 - 12;
+    while (ctx.measureText(text).width > maxW && fs > 22) {
+      fs -= 3;
+      ctx.font = `bold ${fs}px "Baloo 2", system-ui, sans-serif`;
+    }
+    const h = fs + 36;
     ctx.fillStyle = bg;
-    const w = Math.min(s - 4, ctx.measureText(text).width + pad * 2);
-    roundRect(ctx, (s - w) / 2, s / 2 - 36, w, 72, 16);
+    const w = Math.min(s - 6, ctx.measureText(text).width + pad * 2);
+    roundRect(ctx, (s - w) / 2, (s - h) / 2, w, h, 20);
     ctx.fill();
     ctx.fillStyle = fg;
     ctx.fillText(text, s / 2, s / 2 + 2);

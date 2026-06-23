@@ -1,5 +1,6 @@
-// Procedural Web Audio sound effects. No samples — everything is synthesized so
-// there are zero asset dependencies. Implements the game's Sfx interface.
+// Procedural Web Audio sound effects — bright, bouncy, kid-friendly. No samples;
+// everything is synthesized so there are zero asset dependencies. Implements the
+// game's Sfx interface and no-ops safely when there's no AudioContext.
 
 import type { Sfx } from "../game/ctx";
 
@@ -22,20 +23,18 @@ export class WebSfx implements Sfx {
     return this.ac;
   }
 
-  /** Resume the context after a user gesture (browsers gate autoplay). */
   unlock(): void {
     const ac = this.ctx();
     if (ac && ac.state === "suspended") void ac.resume();
   }
-
   setMuted(m: boolean): void {
     this.muted = m;
   }
 
-  private tone(freq: number, dur: number, type: OscillatorType, gain = 0.3, slideTo?: number): void {
+  private tone(freq: number, dur: number, type: OscillatorType, gain = 0.3, slideTo?: number, delay = 0): void {
     const ac = this.ctx();
     if (!ac || !this.master || this.muted) return;
-    const t = ac.currentTime;
+    const t = ac.currentTime + delay;
     const osc = ac.createOscillator();
     const g = ac.createGain();
     osc.type = type;
@@ -71,53 +70,67 @@ export class WebSfx implements Sfx {
     src.start(t);
   }
 
+  /** A quick rising arpeggio (used for happy/celebration sounds). */
+  private arp(notes: number[], step = 0.07, type: OscillatorType = "triangle", gain = 0.24): void {
+    notes.forEach((f, i) => this.tone(f, 0.18, type, gain, f * 1.4, i * step));
+  }
+
   grab(): void {
-    this.tone(420, 0.08, "triangle", 0.22, 620);
+    this.tone(440, 0.08, "triangle", 0.2, 640);
   }
   place(): void {
-    this.tone(280, 0.09, "sine", 0.26, 180);
-    this.noise(0.06, 0.12, 1200);
+    this.tone(280, 0.09, "sine", 0.24, 180);
+    this.noise(0.05, 0.1, 1200);
   }
   pull(perfect: boolean): void {
-    if (perfect) {
-      this.tone(660, 0.1, "triangle", 0.26, 990);
-      this.tone(990, 0.16, "sine", 0.2, 1320);
-    } else {
-      this.tone(520, 0.1, "triangle", 0.22, 720);
-    }
+    if (perfect) this.arp([660, 880, 1175], 0.05, "triangle", 0.22);
+    else this.tone(540, 0.1, "triangle", 0.2, 760);
   }
-  chop(): void {
-    this.noise(0.05, 0.22, 2200);
-    this.tone(180, 0.05, "square", 0.12, 120);
+  pour(): void {
+    this.noise(0.22, 0.1, 600);
+    this.tone(420, 0.2, "sine", 0.12, 540);
+  }
+  scoop(): void {
+    this.tone(700, 0.12, "sine", 0.18, 980);
+    this.tone(980, 0.1, "triangle", 0.12);
   }
   serve(combo: number): void {
-    const base = 523 * Math.pow(1.0595, Math.min(combo, 12) * 2);
+    const base = 523 * Math.pow(1.0595, Math.min(combo, 10) * 2);
     this.tone(base, 0.1, "triangle", 0.26, base * 1.5);
     this.tone(base * 1.5, 0.16, "sine", 0.18);
   }
   coin(): void {
-    this.tone(988, 0.06, "square", 0.18);
-    this.tone(1319, 0.12, "square", 0.16);
+    this.tone(988, 0.06, "square", 0.16);
+    this.tone(1319, 0.12, "square", 0.14);
   }
-  error(): void {
-    this.tone(200, 0.18, "sawtooth", 0.22, 120);
+  yay(): void {
+    this.arp([523, 659, 784, 1047], 0.06, "triangle", 0.22);
   }
-  burn(): void {
-    this.noise(0.3, 0.2, 400);
+  sad(): void {
+    this.tone(420, 0.18, "sine", 0.18, 280);
+    this.tone(300, 0.22, "sine", 0.14, 200, 0.12);
   }
-  onFire(): void {
-    this.tone(330, 0.2, "sawtooth", 0.2, 660);
-    this.tone(660, 0.3, "triangle", 0.18, 990);
+  toss(): void {
+    this.noise(0.16, 0.16, 500);
+    this.tone(200, 0.12, "sine", 0.1, 120);
   }
   ui(): void {
-    this.tone(560, 0.06, "sine", 0.16, 720);
-  }
-  build(): void {
-    this.tone(440, 0.07, "square", 0.16, 560);
-    this.noise(0.04, 0.08, 1500);
+    this.tone(560, 0.06, "sine", 0.14, 720);
   }
   dash(): void {
-    this.noise(0.16, 0.16, 600);
-    this.tone(520, 0.14, "sine", 0.14, 240);
+    this.noise(0.16, 0.14, 600);
+    this.tone(520, 0.14, "sine", 0.12, 240);
+  }
+  star(): void {
+    this.arp([784, 988, 1318], 0.05, "triangle", 0.2);
+  }
+  fanfare(): void {
+    this.arp([523, 659, 784, 1047, 1319], 0.09, "triangle", 0.26);
+    this.tone(1047, 0.5, "sine", 0.16, 1047, 0.45);
+  }
+  bark(): void {
+    // a happy little "yip-yip"
+    this.tone(520, 0.08, "square", 0.18, 360);
+    this.tone(620, 0.08, "square", 0.16, 420, 0.1);
   }
 }

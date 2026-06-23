@@ -1,72 +1,56 @@
-// Phase-machine smoke: title → playing → dayEnd → manage → build (place an
-// item) → manage → next shift, plus the gameOver (quota miss) and win
-// (final day cleared) branches.
+// Flow smoke: stars are scored from happy guests, finishing a day shows the
+// celebration → pick-a-treat → next day, treats stack, and the run is always
+// winnable (we can reach the win screen).
 import { withGame, finish } from "./_harness.mjs";
 
 const fail = await withGame(async ({ page, check }) => {
   const r = await page.evaluate(() => {
-    const SR = window.__SR;
-    const G = window.__G;
+    const SR = window.__SR, G = window.__G;
+    SR.quickStart();
     const log = {};
 
-    SR.quickStart();
-    log.playing = G.phase === "playing" && G.day === 1;
+    G.servedToday = G.goal;
+    log.stars3 = SR.stars();
+    G.servedToday = 0;
+    log.stars1 = SR.stars();
 
-    // Clear the shift by meeting quota, then run the clock out.
-    G.dayCoins = G.quota;
-    G.dayTime = 0;
-    SR.tick(0.1);
-    log.dayEnd = G.phase === "dayEnd";
+    G.servedToday = G.goal;
+    SR.finishDay();
+    log.afterFinish = G.phase;
+    log.starsSet = G.stars;
 
-    SR.ctrl.toManage();
-    log.manage = G.phase === "manage" && G.shopOffer.length > 0 && G.upgradeOffer.length > 0;
+    SR.nextDay();
+    log.afterNext = G.phase;
+    log.choices = G.treatChoices.length;
 
-    SR.ctrl.enterBuild();
-    log.build = G.phase === "build" && G.build.active === true;
+    const before = G.day;
+    SR.chooseTreat(G.treatChoices[0]);
+    log.treats1 = G.treats.length;
+    SR.finishManage();
+    if (G.phase === "cutscene") SR.skipStory();
+    log.dayAdvanced = G.day === before + 1 && G.phase === "playing";
 
-    // Place a starting decor item from inventory onto an empty cell.
-    const brushId = Object.keys(G.inventory).find((k) => G.inventory[k] > 0);
-    G.build.brush = brushId;
-    G.build.cursorCol = 8;
-    G.build.cursorRow = 3;
-    const invBefore = G.inventory[brushId] || 0;
-    SR.buildClick();
-    log.placed = !!SR.itemAt(8, 3) && (G.inventory[brushId] || 0) === invBefore - 1;
-
-    SR.ctrl.exitBuild();
-    log.backToManage = G.phase === "manage";
-
-    SR.ctrl.startNextShift();
-    log.nextDay = G.phase === "playing" && G.day === 2;
-
-    // Quota miss → "closed" cutscene → game over.
-    G.dayCoins = 0;
-    G.dayTime = 0;
-    SR.tick(0.1);
-    SR.skipStory();
-    log.gameOver = G.phase === "gameOver";
-
-    // Win branch: clear the final day → ending cutscene → win.
-    SR.quickStart();
-    G.day = 6;
-    G.dayCoins = 99999;
-    G.dayTime = 0;
-    SR.tick(0.1);
-    SR.skipStory();
-    log.win = G.phase === "win";
-
+    let safety = 0;
+    while (G.phase !== "win" && safety++ < 60) {
+      if (G.phase === "playing") { G.servedToday = G.goal; SR.finishDay(); }
+      else if (G.phase === "dayComplete") SR.nextDay();
+      else if (G.phase === "manage") { if (G.treatChoices.length) SR.chooseTreat(G.treatChoices[0]); SR.finishManage(); }
+      else if (G.phase === "cutscene") SR.skipStory();
+      else break;
+    }
+    log.reachedWin = G.phase === "win";
+    log.finalDay = G.day;
     return log;
   });
 
-  check("starts on day 1 playing", r.playing);
-  check("meeting quota ends the day", r.dayEnd);
-  check("manager rolls shop + upgrades", r.manage);
-  check("can enter build mode", r.build);
-  check("placing consumes inventory + fills the cell", r.placed);
-  check("leaving build returns to manager", r.backToManage);
-  check("starting next shift advances the day", r.nextDay);
-  check("missing quota triggers game over", r.gameOver);
-  check("clearing the final day wins", r.win);
+  check("3 stars for hitting the goal", r.stars3 === 3);
+  check("at least 1 star always (never 0)", r.stars1 === 1);
+  check("finishing a day shows the celebration", r.afterFinish === "dayComplete", `phase=${r.afterFinish}`);
+  check("stars are recorded", r.starsSet === 3);
+  check("Next opens the Manage screen with 3 upgrades", r.afterNext === "manage" && r.choices === 3);
+  check("choosing an upgrade + starting advances the day", r.dayAdvanced);
+  check("the upgrade is kept", r.treats1 === 1);
+  check("the run is winnable", r.reachedWin, `finalDay=${r.finalDay}`);
 });
 
 finish("FLOW", fail);

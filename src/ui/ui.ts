@@ -1,546 +1,828 @@
-// DOM UI: the persistent HUD plus every overlay screen (title, day results, the
-// between-day manager with shop/pricing/upgrades tabs, the build-mode palette,
-// game over, win). The UI reads G and calls game logic directly; phase
-// transitions go through the GameController the main loop provides.
+// DOM UI over the live 3D diner: a big, friendly HUD plus every overlay screen
+// (title, setup studio, day-card, day-complete stars, between-day manage, pause,
+// win) and the cutscene presentation. Minimal text, big icons — a young kid plays
+// by pictures. The UI reads G and calls the GameController the main loop provides.
+// Customization edits mutate a working config and call setConfig, so the 3D diner
+// behind the panel updates live.
 
-import type { GameState } from "../game/types";
-import type { Ctx } from "../game/ctx";
-import { fmtTime } from "../core/math";
-import { def } from "../game/catalog";
-import { items } from "../game/grid";
-import { recomputeDerived } from "../game/adjacency";
-import { PRICE_LEVELS, QUOTAS, TOTAL_DAYS, HELPER_HIRE_COST, HELPER_UPGRADE_COST, HELPER_WAGES, ON_FIRE_AT } from "../game/balance";
-import { upgradeDef, applyUpgrade } from "../game/upgrades";
-import { buyItem, canAfford, hireHelper, upgradeHelper } from "../game/shop";
-import { setBrush } from "../game/placement";
-import { careerRank } from "../game/story";
-import { cutsceneText, currentBeat, lineComplete } from "../game/cutscene";
-import { tutorialText, tutorialStep } from "../game/tutorial";
+import type { FoodId, GameState, PetKind, RestaurantConfig, StationId, TreatId } from "../game/types";
+import { TREATS } from "../game/upgrades";
+import { chefRank } from "../game/story";
+import { cutsceneText, currentShot } from "../game/cutscene";
+import { FIRE_AT } from "../game/balance";
 import { loadMeta } from "../core/save";
+import {
+  SWATCHES, TONE_SWATCHES, PET_OPTIONS, FOOD_OPTIONS, MAX_TABLES,
+  cloneConfig, foodUnlocked, petUnlocked, unlockLabel,
+} from "../game/customize";
 
 export interface GameController {
   play(): void;
-  toManage(): void;
-  startNextShift(): void;
-  enterBuild(): void;
-  exitBuild(): void;
+  continueRun(): void;
+  hasSave(): boolean;
   togglePause(): void;
-  advanceCutscene(): void;
+  resume(): void;
+  restart(): void;
+  quitToTitle(): void;
+  config(): RestaurantConfig;
+  setConfig(c: RestaurantConfig): void;
+  setStudioFocus(focus: "chef" | "room", cat?: string): void;
+  finishSetup(): void;
+  nextFromDayComplete(): void;
+  chooseTreat(id: TreatId): void;
+  finishManage(): void;
+  toggleTable(i: number): void;
+  swapStations(a: StationId, b: StationId): void;
+  moveTable(i: number, x: number, z: number): void;
+  moveStation(id: StationId, x: number, z: number): void;
+  addTable(): void;
+  removeTable(): void;
   skipCutscene(): void;
   toggleMute(): void;
   toggleQuality(): void;
-  quitToTitle(): void;
 }
 
-type El = HTMLElement;
-function el(tag: string, attrs: Record<string, string> = {}, ...kids: (El | string)[]): El {
-  const e = document.createElement(tag);
-  for (const k in attrs) {
-    if (k === "class") e.className = attrs[k];
-    else e.setAttribute(k, attrs[k]);
-  }
-  for (const c of kids) e.append(c);
-  return e;
-}
-const btn = (label: string, cls: string, on: () => void): El => {
-  const b = el("button", { class: `btn ${cls}` }, label);
-  b.addEventListener("click", on);
-  return b;
+const $ = (html: string): HTMLElement => {
+  const t = document.createElement("template");
+  t.innerHTML = html.trim();
+  return t.content.firstElementChild as HTMLElement;
 };
 
-const starStr = (n: number): string => "★".repeat(n) + "☆".repeat(Math.max(0, 3 - n));
+const hex = (n: number): string => n.toString(16).padStart(6, "0");
+
+// Top-down floor-map mapping (matches the diner FLOOR with a little margin).
+const MAP_MINX = -12.5, MAP_W = 25, MAP_MINZ = -10.5, MAP_H = 17;
+const clamp01 = (v: number): number => Math.max(0, Math.min(1, v));
+const clampN = (v: number, a: number, b: number): number => Math.max(a, Math.min(b, v));
+const worldToMapPct = (x: number, z: number): [number, number] =>
+  [((x - MAP_MINX) / MAP_W) * 100, ((z - MAP_MINZ) / MAP_H) * 100];
+const mapPctToWorld = (px: number, py: number): [number, number] =>
+  [px * MAP_W + MAP_MINX, py * MAP_H + MAP_MINZ];
 
 export class UI {
-  private hud: El;
-  private hint: El;
-  private overlay: El;
-  private derived: El;
-  private toast: El;
-  private modChip: El;
-  private dayCardEl: El;
-  private dcTitle: El;
-  private dcSub: El;
-  private fxLow: El;
-  private fxFire: El;
-  private fxFlash: El;
-  private pauseEl: El;
-  private tutEl: El;
-  private cs: { portrait: El; name: El; text: El; hint: El } | null = null;
-  private refs: Record<string, El> = {};
+  private root: HTMLElement;
+  private ctrl: GameController;
+
+  // cached refs
+  private fxLow!: HTMLElement;
+  private fxFire!: HTMLElement;
+  private fxFlash!: HTMLElement;
+  private hud!: HTMLElement;
+  private dayVal!: HTMLElement;
+  private scoreVal!: HTMLElement;
+  private servedVal!: HTMLElement;
+  private timerBar!: HTMLElement;
+  private timerWrap!: HTMLElement;
+  private comboChip!: HTMLElement;
+  private nextHint!: HTMLElement;
+  private actionBtn!: HTMLElement;
+  private dayCardEl!: HTMLElement;
+  private tutBadge!: HTMLElement;
+  private screens!: HTMLElement;
+  private cine!: HTMLElement;
+
+  private lastScore = 0;
   private lastPhase = "";
-  private lastMod = "";
-  private derivedSig = "";
-  private lastCombo = 0;
-  private lastBumpCombo = 0;
-  private pauseShown = false;
-  private lastTut = "";
+  private lastDayCardKey = "";
+  private uiLastShot = -1;
+  private muteBtns: HTMLElement[] = [];
+  private qualBtns: HTMLElement[] = [];
+  private work: RestaurantConfig | null = null; // live editing copy in setup/manage
+  private czCat: CzCat = "chef"; // which customizer category is open
 
-  constructor(root: El, private ctrl: GameController, private ctx: Ctx) {
-    this.hud = this.buildHud();
-    this.hint = el("div", { class: "hint" }, el("span", { class: "key" }, "SPACE"), el("span", { id: "hint-text" }));
-    this.toast = el("div", { class: "toast" });
-    this.derived = el("div", { class: "derived" });
-    this.modChip = el("div", { class: "modchip" });
-    this.dcTitle = el("div", { class: "dc-title" });
-    this.dcSub = el("div", { class: "dc-sub" });
-    this.dayCardEl = el("div", { class: "daycard" }, this.dcTitle, this.dcSub);
-    this.overlay = el("div", { class: "overlay" });
-    // Full-screen feedback layers (behind the HUD/overlay).
-    const fxVignette = el("div", { class: "fx fx-vignette" });
-    this.fxLow = el("div", { class: "fx fx-lowtime" });
-    this.fxFire = el("div", { class: "fx fx-fire" });
-    this.fxFlash = el("div", { class: "fx fx-flash" });
-    this.pauseEl = el("div", { class: "overlay" });
-    this.tutEl = el("div", { class: "tutorial" });
-    root.append(fxVignette, this.fxLow, this.fxFire, this.fxFlash, this.hud, this.hint, this.toast, this.modChip, this.tutEl, this.dayCardEl, this.derived, this.overlay, this.pauseEl);
-    this.pauseEl.style.display = "none";
-    this.tutEl.style.display = "none";
-    this.hud.style.display = "none";
-    this.hint.style.display = "none";
-    this.toast.style.display = "none";
-    this.modChip.style.display = "none";
-    this.dayCardEl.style.display = "none";
-    this.derived.style.display = "none";
+  constructor(root: HTMLElement, ctrl: GameController) {
+    this.root = root;
+    this.ctrl = ctrl;
+    this.build();
   }
 
-  private buildHud(): El {
-    const stat = (label: string, id: string, cls = "") => {
-      const v = el("span", { class: "val", id });
-      this.refs[id] = v;
-      return el("div", { class: `stat ${cls}` }, el("span", { class: "label" }, label), v);
-    };
-    const quotaBar = el("i", { id: "h-quotabar" });
-    this.refs["h-quotabar"] = quotaBar;
-    const quota = el("div", { class: "quota-wrap" },
-      el("span", { class: "small-muted" }, "Quota ", this.refs["h-quota"] = el("span", { id: "h-quota" })),
-      el("div", { class: "bar" }, quotaBar));
-    return el("div", { class: "hud" },
-      stat("Day", "h-day"),
-      el("div", { class: "sep" }),
-      stat("Time", "h-time", "timer"),
-      el("div", { class: "sep" }),
-      stat("Coins", "h-coins"),
-      quota,
-      el("div", { class: "sep" }),
-      stat("Stars", "h-rep"),
-      el("div", { class: "sep" }),
-      stat("Combo", "h-combo", "combo"));
-  }
+  private build(): void {
+    this.root.innerHTML = "";
 
-  /** Restart a CSS animation by toggling its class (forces a reflow). */
-  private replay(elm: El, cls: string): void {
-    elm.classList.remove(cls);
-    void elm.offsetWidth;
-    elm.classList.add(cls);
-  }
+    this.root.appendChild($(`<div class="fx fx-vignette"></div>`));
+    this.fxLow = $(`<div class="fx fx-lowtime"></div>`);
+    this.fxFire = $(`<div class="fx fx-fire"></div>`);
+    this.fxFlash = $(`<div class="fx fx-flash"></div>`);
+    this.root.append(this.fxLow, this.fxFire, this.fxFlash);
 
-  private flash(): void {
-    this.replay(this.fxFlash, "on");
+    this.hud = $(`
+      <div class="hud">
+        <div class="stat"><div class="label">Day</div><div class="val" data-day>1</div></div>
+        <div class="sep"></div>
+        <div class="stat"><div class="label">Score</div><div class="val score" data-score>0</div></div>
+        <div class="sep"></div>
+        <div class="stat"><div class="label">Happy</div><div class="val served" data-served>0/0</div></div>
+        <div class="sep"></div>
+        <div class="timer-wrap" data-timerwrap><div class="label">Time</div><div class="bar"><i data-timer></i></div></div>
+      </div>`);
+    this.root.appendChild(this.hud);
+    this.dayVal = this.hud.querySelector("[data-day]")!;
+    this.scoreVal = this.hud.querySelector("[data-score]")!;
+    this.servedVal = this.hud.querySelector("[data-served]")!;
+    this.timerBar = this.hud.querySelector("[data-timer]")!;
+    this.timerWrap = this.hud.querySelector("[data-timerwrap]")!;
+
+    this.comboChip = $(`<div class="combo-chip"><span class="cc-label">Streak</span><span class="cc-x">×</span><span data-combo>2</span><span class="cc-fire">🔥</span></div>`);
+    this.root.appendChild(this.comboChip);
+
+    this.nextHint = $(`<div class="next-hint"><span class="nh-icon" data-nhicon>✨</span><span class="nh-text" data-nhtext>Let's cook!</span></div>`);
+    this.root.appendChild(this.nextHint);
+
+    this.actionBtn = $(`<div class="action-btn"><span class="ab-icon" data-abicon>🍔</span><span class="ab-text" data-abtext>Grab</span><span class="ab-key">SPACE</span></div>`);
+    this.root.appendChild(this.actionBtn);
+
+    this.dayCardEl = $(`<div class="daycard"><div class="dc-title" data-dctitle>Day 1</div><div class="dc-sub" data-dcsub></div></div>`);
+    this.root.appendChild(this.dayCardEl);
+
+    this.tutBadge = $(`<div class="tut-badge">🎓 Tutorial — follow the arrow!</div>`);
+    this.root.appendChild(this.tutBadge);
+
+    this.screens = $(`<div class="screens"></div>`);
+    this.root.appendChild(this.screens);
+
+    this.cine = $(`
+      <div class="cine">
+        <div class="cine-bar cine-bar--top"></div>
+        <div class="cine-bar cine-bar--bot"></div>
+        <div class="cine-fade"></div>
+        <div class="cine-title"><h1 data-ctitle></h1><p data-csub></p></div>
+        <div class="cine-dialog">
+          <span class="cd-portrait" data-cportrait>👵</span>
+          <span class="cd-body"><span class="cd-name" data-cname></span><span class="cd-text" data-ctext></span></span>
+        </div>
+        <button class="cine-skip" data-cskip>Skip ▸</button>
+      </div>`);
+    this.root.appendChild(this.cine);
+    this.cine.querySelector("[data-cskip]")!.addEventListener("click", () => this.ctrl.skipCutscene());
   }
 
   // ── per-frame ──
   frame(G: GameState): void {
+    this.updateHud(G);
+    this.updatePrompts(G);
+    this.updateDayCard(G);
+    this.updateFx(G);
+    this.updateCine(G);
+    this.tutBadge.classList.toggle("show", G.phase === "playing" && G.tutorial);
     if (G.phase !== this.lastPhase) {
       this.lastPhase = G.phase;
-      this.onPhase(G);
+      this.renderScreens(G);
     }
-    const playing = G.phase === "playing";
-    this.hud.style.display = playing || G.phase === "build" ? "flex" : "none";
-    if (this.hud.style.display !== "none") this.updateHud(G);
-
-    // Hint.
-    if (playing && G.hint) {
-      this.hint.style.display = "block";
-      (this.refs["hint-text"] ??= this.hint.querySelector("#hint-text") as El).textContent = G.hint;
-    } else {
-      this.hint.style.display = "none";
-    }
-
-    // Toast.
-    if (G.toast) {
-      this.toast.style.display = "block";
-      this.toast.textContent = G.toast.text;
-      this.toast.style.opacity = String(Math.max(0, 1 - G.toast.t / 2.6));
-    } else {
-      this.toast.style.display = "none";
-    }
-
-    // Modifier chip — a whole-shift reminder of today's twist.
-    if ((G.phase === "playing" || G.phase === "build") && G.modifier) {
-      if (this.lastMod !== G.modifier.id) {
-        this.lastMod = G.modifier.id;
-        this.modChip.replaceChildren(
-          el("span", { class: "mc-icon" }, G.modifier.icon),
-          el("span", {}, G.modifier.name),
-        );
-      }
-      this.modChip.style.display = "flex";
-    } else {
-      this.modChip.style.display = "none";
-      this.lastMod = "";
-    }
-
-    // First-run tutorial callout.
-    const tut = playing ? tutorialText(G) : null;
-    if (tut) {
-      if (tut !== this.lastTut) {
-        this.lastTut = tut;
-        this.tutEl.replaceChildren(
-          el("div", { class: "tut-step" }, tutorialStep(G)),
-          el("div", { class: "tut-text" }, `👵 ${tut}`),
-        );
-      }
-      this.tutEl.style.display = "block";
-    } else {
-      this.tutEl.style.display = "none";
-      this.lastTut = "";
-    }
-
-    // Derived panel during manage/build.
-    if (G.phase === "manage" || G.phase === "build") {
-      this.derived.style.display = "block";
-      this.renderDerived(G);
-    } else {
-      this.derived.style.display = "none";
-    }
-
-    // Cutscene typewriter.
-    if (G.phase === "cutscene" && G.cutscene && this.cs) {
-      const beat = currentBeat(G.cutscene);
-      if (beat) {
-        this.cs.portrait.textContent = beat.portrait;
-        this.cs.name.textContent = beat.speaker;
-        this.cs.name.style.color = beat.color ?? "#ffffff";
-        this.cs.text.textContent = cutsceneText(G.cutscene);
-        this.cs.hint.style.opacity = lineComplete(G.cutscene) ? "1" : "0.2";
-      }
-    }
-
-    // "Night N" title card (fades in/out over ~3s).
-    if (G.dayCard) {
-      const t = G.dayCard.t;
-      const fade = t < 0.3 ? t / 0.3 : t > 2.4 ? Math.max(0, (3.0 - t) / 0.6) : 1;
-      this.dayCardEl.style.display = "flex";
-      this.dayCardEl.style.opacity = String(fade);
-      this.dcTitle.textContent = G.dayCard.title;
-      this.dcSub.textContent = G.dayCard.sub;
-    } else {
-      this.dayCardEl.style.display = "none";
-    }
-
-    // Full-screen feedback + combo juice.
-    this.fxLow.classList.toggle("active", playing && G.dayTime <= 15);
-    this.fxFire.classList.toggle("active", playing && G.combo >= ON_FIRE_AT);
-    if (playing && G.combo > this.lastCombo) this.flash();
-    if (G.combo !== this.lastBumpCombo && G.combo > 0) {
-      const comboStat = this.refs["h-combo"]?.parentElement as El | undefined;
-      if (comboStat) this.replay(comboStat, "bump");
-    }
-    this.lastCombo = G.combo;
-    this.lastBumpCombo = G.combo;
-
-    // Pause menu (a flag, not a phase).
-    const showPause = playing && G.paused;
-    if (showPause && !this.pauseShown) this.renderPause(G);
-    this.pauseEl.style.display = showPause ? "flex" : "none";
-    this.pauseShown = showPause;
   }
 
   private updateHud(G: GameState): void {
-    this.refs["h-day"].textContent = `${G.day}/${TOTAL_DAYS}`;
-    this.refs["h-time"].textContent = fmtTime(G.dayTime);
-    this.refs["h-time"].parentElement?.classList.toggle("low", G.dayTime <= 15);
-    this.refs["h-coins"].textContent = `$${G.coins}`;
-    this.refs["h-quota"].textContent = `$${G.dayCoins}/$${G.quota}`;
-    this.refs["h-quotabar"].style.width = `${Math.min(100, (G.dayCoins / G.quota) * 100)}%`;
-    this.refs["h-rep"].textContent = `★${Math.round(G.rep)}`;
-    this.refs["h-combo"].textContent = G.combo > 0 ? `x${G.combo}` : "—";
-    this.refs["h-combo"].parentElement?.classList.toggle("fire", G.combo >= ON_FIRE_AT);
-  }
-
-  private renderDerived(G: GameState): void {
-    const grills = items(G.grid).filter((i) => { const d = def(i.defId); return d?.kind === "grill" || d?.kind === "fryer"; });
-    const avgSpeed = grills.length ? grills.reduce((a, i) => a + i.effCookSpeed, 0) / grills.length : G.mods.cookSpeed;
-    const lines: [string, string][] = [
-      ["Ambience vibe", `${Math.round(G.derived.vibe)}`],
-      ["Crowd size", `${G.derived.spawnMult.toFixed(2)}×`],
-      ["Patience", `${G.derived.patience.toFixed(2)}×`],
-      ["Cook speed", `${avgSpeed.toFixed(2)}×`],
-      ["Move speed", `${G.derived.moveSpeed.toFixed(2)}×`],
-      ["Tip / serve", `+$${Math.round(G.derived.tip)}`],
-      ["Combo window", `${G.derived.comboWindow.toFixed(0)}s`],
-      ["Perfect window", `+${G.derived.perfectWindow.toFixed(1)}s`],
-      ["Reputation gain", `${G.derived.repGainMult.toFixed(2)}×`],
-    ];
-    // Skip the DOM rebuild unless a value actually changed.
-    const sig = lines.map((l) => l[1]).join("|");
-    if (sig === this.derivedSig) return;
-    this.derivedSig = sig;
-    this.derived.replaceChildren(
-      el("h4", {}, "Kitchen Effects"),
-      ...lines.map(([k, v]) => el("div", { class: "line" }, el("span", {}, k), el("b", {}, v))),
-    );
-  }
-
-  // ── overlays ──
-  private onPhase(G: GameState): void {
-    this.overlay.className = "overlay";
-    this.overlay.replaceChildren();
-    this.cs = null;
-    switch (G.phase) {
-      case "title": this.renderTitle(); break;
-      case "cutscene": this.renderCutscene(); break;
-      case "dayEnd": this.renderDayEnd(G); break;
-      case "manage": this.renderManage(G); break;
-      case "build": this.renderBuild(G); break;
-      case "gameOver": this.renderEnd(G, false); break;
-      case "win": this.renderEnd(G, true); break;
-      default: this.overlay.className = "overlay transparent"; break;
+    const playing = G.phase === "playing";
+    this.hud.style.display = playing ? "flex" : "none";
+    if (!playing) {
+      this.comboChip.classList.remove("show");
+      this.nextHint.classList.remove("show");
+      this.actionBtn.classList.remove("show");
+      return;
     }
-  }
+    this.dayVal.textContent = G.tutorial ? "🎓" : String(G.day);
+    if (G.coins !== this.lastScore) {
+      this.scoreVal.textContent = String(G.coins);
+      this.scoreVal.classList.remove("bump");
+      void this.scoreVal.offsetWidth;
+      this.scoreVal.classList.add("bump");
+      if (G.coins > this.lastScore) this.flashServe();
+      this.lastScore = G.coins;
+    }
+    this.servedVal.textContent = `${G.servedToday}/${G.goal}`;
+    const ratio = Math.max(0, G.dayTime / Math.max(1, G.dayLen));
+    this.timerWrap.style.visibility = G.tutorial ? "hidden" : "visible";
+    this.timerBar.style.width = `${ratio * 100}%`;
+    this.timerWrap.classList.toggle("low", !G.tutorial && G.dayTime < 10);
 
-  private renderCutscene(): void {
-    this.overlay.className = "overlay cutscene-ov";
-    const portrait = el("div", { class: "cs-portrait" });
-    const name = el("div", { class: "cs-name" });
-    const text = el("div", { class: "cs-text" });
-    const hint = el("div", { class: "cs-hint" }, "▸ SPACE / click");
-    const box = el("div", { class: "cs-box clickable" },
-      portrait,
-      el("div", { class: "cs-body" }, name, text, hint));
-    box.addEventListener("click", () => this.ctrl.advanceCutscene());
-    const skip = btn("Skip ▸", "ghost small", () => this.ctrl.skipCutscene());
-    skip.classList.add("cs-skip");
-    this.overlay.replaceChildren(box, skip);
-    this.cs = { portrait, name, text, hint };
-  }
-
-  private renderTitle(): void {
-    const meta = loadMeta();
-    const muteBtn = btn(this.ctx.G.muted ? "🔇 Sound: Off" : "🔊 Sound: On", "ghost small", () => {
-      this.ctrl.toggleMute();
-      this.onPhase(this.ctx.G);
-    });
-    const qualBtn = btn(this.ctx.G.quality === "high" ? "✨ Graphics: High" : "⚡ Graphics: Low", "ghost small", () => {
-      this.ctrl.toggleQuality();
-      this.onPhase(this.ctx.G);
-    });
-    this.overlay.append(
-      el("h1", { class: "title-logo" }, "SIZZLE RUSH"),
-      el("div", { class: "subtitle" }, "A failing diner. Six nights to save it."),
-      el("div", { class: "panel center" },
-        el("div", { class: "rank-badge" }, "👨‍🍳 ", el("b", {}, careerRank(meta.bestDay))),
-        el("div", { class: "small-muted", style: "margin-top:8px" }, "Move WASD · Interact SPACE · Dash SHIFT · Pause P"),
-        el("div", { class: "small-muted" }, "Cook & serve, then rearrange & decorate your kitchen between shifts — placement matters."),
-        el("h3", {}, "Diner Records"),
-        el("div", { class: "stats-grid", style: "margin-top:2px" },
-          el("span", { class: "k" }, "Best night reached"), el("span", { class: "v" }, `${meta.bestDay}/${TOTAL_DAYS}`),
-          el("span", { class: "k" }, "Best bank"), el("span", { class: "v" }, `$${meta.bestCoins}`),
-          el("span", { class: "k" }, "Best combo"), el("span", { class: "v" }, `x${meta.bestCombo}`),
-          el("span", { class: "k" }, "Best night rating"), el("span", { class: "v" }, starStr(meta.bestStars)),
-          el("span", { class: "k" }, "Shifts worked"), el("span", { class: "v" }, `${meta.runs}`)),
-        el("div", { class: "row", style: "margin-top:12px" }, muteBtn, qualBtn),
-      ),
-      btn("▶  New Game", "", () => this.ctrl.play()),
-    );
-  }
-
-  private renderPause(G: GameState): void {
-    this.pauseEl.replaceChildren(
-      el("div", { class: "panel center" },
-        el("h2", {}, "⏸ Paused"),
-        el("div", { class: "small-muted" }, `Night ${G.day} · ${fmtTime(G.dayTime)} left`),
-        el("div", { style: "display:flex; flex-direction:column; gap:10px; align-items:stretch; margin-top:16px; min-width:260px" },
-          btn("▶  Resume", "", () => this.ctrl.togglePause()),
-          el("div", { class: "row" },
-            btn(G.muted ? "🔇 Sound: Off" : "🔊 Sound: On", "ghost small", () => { this.ctrl.toggleMute(); this.renderPause(G); }),
-            btn(G.quality === "high" ? "✨ Graphics: High" : "⚡ Graphics: Low", "ghost small", () => { this.ctrl.toggleQuality(); this.renderPause(G); })),
-          btn("↻  Restart Run", "ghost", () => this.ctrl.play()),
-          btn("Quit to Title", "danger", () => this.ctrl.quitToTitle())),
-      ),
-    );
-  }
-
-  private renderDayEnd(G: GameState): void {
-    const wage = G.helper.hired ? G.helper.wage : 0;
-    this.overlay.append(
-      el("div", { class: "panel center" },
-        el("h2", {}, `Day ${G.day} — Service Complete!`),
-        el("div", { class: "stars" }, starStr(G.dayStars)),
-        el("div", { class: "stats-grid", style: "margin:14px auto; width:340px" },
-          el("span", { class: "k" }, "Earned today"), el("span", { class: "v" }, `$${G.dayCoins}`),
-          el("span", { class: "k" }, "Quota"), el("span", { class: "v" }, `$${G.quota} ✓`),
-          el("span", { class: "k" }, "Served"), el("span", { class: "v" }, `${G.stats.served}`),
-          el("span", { class: "k" }, "Perfect dishes"), el("span", { class: "v" }, `${G.stats.perfect}`),
-          el("span", { class: "k" }, "Walkouts"), el("span", { class: "v" }, `${G.stats.expired}`),
-          el("span", { class: "k" }, "Reputation"), el("span", { class: "v" }, `★${Math.round(G.rep)}`),
-          el("span", { class: "k" }, "Helper wage"), el("span", { class: "v" }, wage ? `-$${wage}` : "—"),
-          el("span", { class: "k" }, "Bank"), el("span", { class: "v" }, `$${G.coins}`)),
-        btn("Manage Restaurant  →", "", () => this.ctrl.toManage()),
-      ),
-    );
-  }
-
-  private renderManage(G: GameState): void {
-    const tabBtn = (id: GameState["manageTab"], label: string) => {
-      const t = el("div", { class: `tab clickable ${G.manageTab === id ? "active" : ""}` }, label);
-      t.addEventListener("click", () => { G.manageTab = id; this.ctx.sfx.ui(); this.onPhase(G); });
-      return t;
-    };
-    const up = G.day; // the upcoming night to prep for
-    const quota = QUOTAS[Math.min(up - 1, QUOTAS.length - 1)];
-    const header = el("div", { class: "center" },
-      el("h2", {}, up === 1 ? "🍳 Welcome to Sizzle Rush!" : `Night ${up - 1} cleared! 🎉`),
-      el("div", { class: "small-muted" }, up === 1 ? "Set up your diner, then open for Night 1." : "Stock up & rearrange before the next rush."),
-      el("div", { class: "small-muted" }, "Bank: ", el("span", { class: "coins-chip" }, `$${G.coins}`),
-        `  ·  Night ${up} quota: $${quota}`));
-
-    let content: El;
-    if (G.manageTab === "shop") content = this.shopTab(G);
-    else if (G.manageTab === "pricing") content = this.pricingTab(G);
-    else content = this.upgradeTab(G);
-
-    this.overlay.append(
-      el("div", { class: "panel", style: "min-width:640px" },
-        header,
-        el("div", { class: "tabs", style: "margin-top:14px" },
-          tabBtn("shop", "🛒 Shop"), tabBtn("pricing", "💲 Pricing"), tabBtn("upgrades", "⭐ Upgrades")),
-        content,
-        el("div", { class: "row", style: "margin-top:20px" },
-          btn("🔧 Decorate & Build", "blue", () => this.ctrl.enterBuild()),
-          btn(`Open Night ${up}  ▶`, "", () => this.ctrl.startNextShift())),
-        this.inventoryNote(G),
-      ),
-    );
-  }
-
-  private inventoryNote(G: GameState): El {
-    const owned = Object.entries(G.inventory).filter(([, n]) => n > 0);
-    if (!owned.length) return el("div", { class: "small-muted center", style: "margin-top:8px" }, "Tip: buy stations & decor, then place them in the Floor Plan.");
-    const txt = owned.map(([id, n]) => `${def(id)?.icon ?? ""}×${n}`).join("  ");
-    return el("div", { class: "small-muted center", style: "margin-top:8px" }, `Unplaced (go to Floor Plan): ${txt}`);
-  }
-
-  private shopTab(G: GameState): El {
-    const cards = G.shopOffer.map((id) => {
-      const d = def(id)!;
-      const affordable = canAfford(G, id);
-      const c = el("div", { class: `card ${affordable ? "" : "disabled"}` },
-        el("div", { class: "emoji" }, d.icon),
-        el("div", { class: "name" }, d.name),
-        el("div", { class: "desc" }, d.desc),
-        el("div", { class: "cost" }, `$${d.cost}`),
-        btn("Buy", "small", () => {
-          if (buyItem(G, id)) { this.ctx.sfx.coin(); this.onPhase(G); }
-          else this.ctx.sfx.error();
-        }));
-      return c;
-    });
-    // Helper hire/upgrade.
-    const h = G.helper;
-    let helperCard: El;
-    if (!h.hired) {
-      helperCard = el("div", { class: `card ${G.coins >= HELPER_HIRE_COST ? "" : "disabled"}` },
-        el("div", { class: "emoji" }, "🧑‍🍳"),
-        el("div", { class: "name" }, "Hire Line Cook"),
-        el("div", { class: "desc" }, `Tends grills so they never burn. Wage $${HELPER_WAGES[1]}/day.`),
-        el("div", { class: "cost" }, `$${HELPER_HIRE_COST}`),
-        btn("Hire", "small", () => { if (hireHelper(G)) { this.ctx.sfx.coin(); this.onPhase(G); } else this.ctx.sfx.error(); }));
-    } else if (h.level < HELPER_WAGES.length - 1) {
-      const cost = HELPER_UPGRADE_COST[h.level + 1];
-      helperCard = el("div", { class: `card ${G.coins >= cost ? "" : "disabled"}` },
-        el("div", { class: "emoji" }, "🧑‍🍳"),
-        el("div", { class: "name" }, `Line Cook Lv.${h.level}`),
-        el("div", { class: "desc" }, `Upgrade to Lv.${h.level + 1}: tends more grills & holds the perfect sear. Wage $${HELPER_WAGES[h.level + 1]}/day.`),
-        el("div", { class: "cost" }, `$${cost}`),
-        btn("Upgrade", "small", () => { if (upgradeHelper(G)) { this.ctx.sfx.coin(); this.onPhase(G); } else this.ctx.sfx.error(); }));
+    if (G.combo >= 2) {
+      this.comboChip.classList.add("show");
+      this.comboChip.classList.toggle("fire", G.combo >= FIRE_AT);
+      (this.comboChip.querySelector("[data-combo]")!).textContent = String(G.combo);
     } else {
-      helperCard = el("div", { class: "card" },
-        el("div", { class: "emoji" }, "🧑‍🍳"),
-        el("div", { class: "name" }, "Line Cook Lv.3"),
-        el("div", { class: "desc" }, "Fully trained! Holds perfect sears on up to 4 grills."));
+      this.comboChip.classList.remove("show");
     }
-    return el("div", { class: "cards", style: "margin-top:6px" }, ...cards, helperCard);
   }
 
-  private pricingTab(G: GameState): El {
-    const opts = PRICE_LEVELS.map((p, i) => {
-      const o = el("div", { class: `price-opt clickable ${G.priceLevel === i ? "active" : ""}` },
-        el("div", { class: "pl" }, p.label),
-        el("div", { class: "pd" }, `Price ${p.price.toFixed(2)}×`),
-        el("div", { class: "pd" }, `Patience ${p.patience.toFixed(2)}×`),
-        el("div", { class: "pd" }, `Crowd ${p.demand.toFixed(2)}×`));
-      o.addEventListener("click", () => { G.priceLevel = i; recomputeDerived(G); this.ctx.sfx.ui(); this.onPhase(G); });
-      return o;
-    });
-    return el("div", { class: "center" },
-      el("p", { class: "small-muted" }, "Higher prices earn more per dish but shrink and impatient-ify your crowd. Vibe & reputation soften the hit."),
-      el("div", { class: "pricing-row" }, ...opts));
+  private updatePrompts(G: GameState): void {
+    if (G.phase !== "playing") return;
+    if (G.guide.active) {
+      this.nextHint.classList.add("show");
+      (this.nextHint.querySelector("[data-nhicon]")!).textContent = G.guide.icon || "✨";
+      (this.nextHint.querySelector("[data-nhtext]")!).textContent = G.guide.label;
+    } else {
+      this.nextHint.classList.remove("show");
+    }
+    if (G.prompt) {
+      this.actionBtn.classList.add("show");
+      (this.actionBtn.querySelector("[data-abtext]")!).textContent = G.prompt.label;
+      (this.actionBtn.querySelector("[data-abicon]")!).textContent = G.prompt.icon;
+    } else {
+      this.actionBtn.classList.remove("show");
+    }
   }
 
-  private upgradeTab(G: GameState): El {
-    if (!G.upgradeOffer.length) {
-      return el("div", { class: "center small-muted", style: "padding:18px" }, "Upgrade chosen for today. Come back tomorrow!");
+  private updateDayCard(G: GameState): void {
+    const dc = G.dayCard;
+    if (dc && G.phase === "playing") {
+      const key = dc.title + "|" + dc.sub;
+      if (key !== this.lastDayCardKey) {
+        this.lastDayCardKey = key;
+        (this.dayCardEl.querySelector("[data-dctitle]")!).textContent = dc.title;
+        (this.dayCardEl.querySelector("[data-dcsub]")!).textContent = dc.sub;
+        this.dayCardEl.classList.remove("show");
+        void this.dayCardEl.offsetWidth;
+        this.dayCardEl.classList.add("show");
+      }
+      this.dayCardEl.style.display = "block";
+      this.dayCardEl.style.opacity = dc.t > 2.4 ? String(Math.max(0, (3 - dc.t) / 0.6)) : "1";
+    } else {
+      this.dayCardEl.style.display = "none";
+      this.lastDayCardKey = "";
     }
-    const cards = G.upgradeOffer.map((id) => {
-      const u = upgradeDef(id)!;
-      const owned = G.upgrades[id] ?? 0;
-      const c = el("div", { class: "card pick" },
-        el("div", { class: "emoji" }, u.icon),
-        el("div", { class: "name" }, u.name),
-        el("div", { class: "desc" }, u.desc),
-        el("div", { class: "small-muted" }, `${owned}/${u.max}`));
-      c.addEventListener("click", () => {
-        if (applyUpgrade(G, id)) { this.ctx.sfx.coin(); G.upgradeOffer = []; this.onPhase(G); }
-      });
-      return c;
-    });
-    return el("div", { class: "center" },
-      el("p", { class: "small-muted" }, "Pick ONE permanent upgrade for the run:"),
-      el("div", { class: "cards" }, ...cards));
   }
 
-  private renderBuild(G: GameState): void {
-    this.overlay.className = "overlay transparent";
-    const bar = el("div", { class: "build-bar" },
-      el("b", {}, "🔧 Floor Plan"),
-      el("span", { class: "keys" }, "Click ", el("b", {}, "place/pick"), " · ", el("b", {}, "R"), " rotate · ", el("b", {}, "X"), " sell · ", el("b", {}, "Esc"), " done"),
-      el("span", { class: "keys" }, "🍽️ Dining floor: click to ", el("b", {}, "add/move a table"), " · ", el("b", {}, "X"), " removes one"),
-      btn("Done", "small", () => this.ctrl.exitBuild()));
-    bar.style.pointerEvents = "auto";
-
-    const palette = el("div", { class: "palette" });
-    palette.style.pointerEvents = "auto";
-    const entries = Object.entries(G.inventory).filter(([, n]) => n > 0);
-    if (!entries.length) {
-      palette.append(el("div", { class: "small-muted" }, "No items to place. Buy stations & decor in the Shop. You can still pick up & rearrange placed items by clicking them."));
-    }
-    for (const [id, n] of entries) {
-      const d = def(id)!;
-      const sw = el("div", { class: `swatch clickable ${G.build.brush === id ? "active" : ""}` },
-        el("div", { class: "emoji" }, d.icon),
-        el("div", {}, d.name.split(" ")[0]),
-        el("div", { class: "qty" }, `×${n}`));
-      sw.addEventListener("click", () => { setBrush(G, G.build.brush === id ? null : id); this.ctx.sfx.ui(); this.renderBuild(G); });
-      palette.append(sw);
-    }
-    this.overlay.replaceChildren(bar, palette);
+  private updateFx(G: GameState): void {
+    const playing = G.phase === "playing";
+    this.fxLow.classList.toggle("active", playing && !G.tutorial && G.dayTime < 10);
+    this.fxFire.classList.toggle("active", playing && G.combo >= FIRE_AT);
   }
 
-  private renderEnd(G: GameState, won: boolean): void {
+  private flashServe(): void {
+    this.fxFlash.classList.remove("on");
+    void this.fxFlash.offsetWidth;
+    this.fxFlash.classList.add("on");
+  }
+
+  // ── cutscene ──
+  private updateCine(G: GameState): void {
+    const cs = G.cutscene;
+    if (!cs) {
+      this.cine.classList.remove("on");
+      this.uiLastShot = -1;
+      return;
+    }
+    this.cine.classList.add("on");
+    const shot = currentShot(cs);
+    if (!shot) return;
+
+    if (cs.shotIndex !== this.uiLastShot) {
+      this.uiLastShot = cs.shotIndex;
+      const fade = this.cine.querySelector(".cine-fade") as HTMLElement;
+      if (shot.fade === "fromBlack") {
+        fade.style.transition = "none";
+        fade.style.opacity = "1";
+        void fade.offsetWidth;
+        fade.style.transition = `opacity ${shot.dur * 0.7}s ease-out`;
+        fade.style.opacity = "0";
+      } else if (shot.fade === "toBlack") {
+        fade.style.transition = `opacity ${shot.dur * 0.9}s ease-in`;
+        fade.style.opacity = "1";
+      }
+    }
+
+    const titleEl = this.cine.querySelector(".cine-title") as HTMLElement;
+    if (shot.title) {
+      titleEl.classList.add("show");
+      (this.cine.querySelector("[data-ctitle]")!).textContent = shot.title.text;
+      (this.cine.querySelector("[data-csub]")!).textContent = shot.title.sub ?? "";
+    } else {
+      titleEl.classList.remove("show");
+    }
+
+    const dialog = this.cine.querySelector(".cine-dialog") as HTMLElement;
+    if (shot.line) {
+      dialog.classList.add("show");
+      (this.cine.querySelector("[data-cportrait]")!).textContent = shot.line.portrait;
+      const nameEl = this.cine.querySelector("[data-cname]") as HTMLElement;
+      nameEl.textContent = shot.line.who;
+      nameEl.style.color = shot.line.color ?? "#fff4ea";
+      (this.cine.querySelector("[data-ctext]")!).textContent = cutsceneText(cs);
+    } else {
+      dialog.classList.remove("show");
+    }
+  }
+
+  // ── overlay screens ──
+  private renderScreens(G: GameState): void {
+    const phase = G.phase;
+    this.work = null;
+    // Open the customizer on the category the game state asks for (lets debug
+    // scenarios cut straight to e.g. the Diner section with a room-framed preview).
+    if (phase === "setup" || phase === "manage") {
+      this.czCat = CZ_CATS.some(([k]) => k === G.studioCat) ? (G.studioCat as CzCat) : "chef";
+    }
+    if (phase === "title") this.screens.innerHTML = this.titleHtml();
+    else if (phase === "setup") this.screens.innerHTML = this.setupHtml(G);
+    else if (phase === "dayComplete") this.screens.innerHTML = this.dayCompleteHtml(G);
+    else if (phase === "manage") this.screens.innerHTML = this.manageHtml(G);
+    else if (phase === "win") this.screens.innerHTML = this.winHtml(G);
+    else this.screens.innerHTML = "";
+    this.wireScreens(G);
+  }
+
+  private titleHtml(): string {
     const meta = loadMeta();
-    this.overlay.append(
-      el("h1", { class: "title-logo" }, won ? "KITCHEN LEGEND!" : "YOU'RE FIRED"),
-      el("div", { class: "panel center" },
-        el("div", { class: "subtitle" }, won ? "You survived all six dinner rushes." : `The boss expected $${G.quota} on day ${G.day}.`),
-        el("div", { class: "stats-grid", style: "margin:14px auto; width:320px" },
-          el("span", { class: "k" }, "Days cleared"), el("span", { class: "v" }, `${won ? G.day : G.day - 1}/${TOTAL_DAYS}`),
-          el("span", { class: "k" }, "Final bank"), el("span", { class: "v" }, `$${G.coins}`),
-          el("span", { class: "k" }, "Best combo"), el("span", { class: "v" }, `x${G.stats.bestCombo}`),
-          el("span", { class: "k" }, "Reputation"), el("span", { class: "v" }, `★${Math.round(G.rep)}`),
-          el("span", { class: "k" }, "All-time best day"), el("span", { class: "v" }, `${meta.bestDay}`)),
-        btn("Play Again", "", () => this.ctrl.play())),
+    const cont = this.ctrl.hasSave()
+      ? `<button class="btn big" data-continue>▶ Continue</button>`
+      : "";
+    const playLabel = this.ctrl.hasSave() ? "✨ New Diner" : "▶ Play";
+    return `
+      <div class="overlay">
+        <div class="title-logo">SIZZLE&nbsp;RUSH</div>
+        <div class="subtitle">🍔 Help Pip cook at Grandma's Diner! 🍦</div>
+        ${cont}
+        <button class="btn ${this.ctrl.hasSave() ? "" : "big"}" data-play>${playLabel}</button>
+        <div class="panel small">
+          <div class="rank">Rank: <b>${chefRank(meta.bestDay)}</b></div>
+          <div class="muted">Best day reached: ${meta.bestDay} ${"⭐".repeat(Math.min(3, meta.bestStars))}</div>
+        </div>
+        <div class="row">
+          <button class="btn ghost" data-mute>${muteLabel(meta.muted)}</button>
+          <button class="btn ghost" data-qual>${qualLabel(meta.quality)}</button>
+        </div>
+        <div class="controls-tip">Move: Arrow keys (or WASD) &nbsp;·&nbsp; Do everything: SPACE &nbsp;·&nbsp; Dash: Shift</div>
+      </div>`;
+  }
+
+  // ── Setup studio (after the tutorial) ──
+  private setupHtml(G: GameState): string {
+    const c = this.ctrl.config();
+    return `
+      <div class="overlay wide dock">
+        <div class="big-title">🎉 Build Your Diner!</div>
+        <div class="subtitle">Name it, choose your food &amp; friends, then make it yours. Watch it change behind you!</div>
+        <div class="cz-panel" data-cz-panel>
+          ${this.nameSection(c)}
+          ${this.customizerHtml(G)}
+          <div class="cz-group">
+            <div class="cz-title">🔀 Layout — place your tables &amp; equipment</div>
+            ${this.arrangePanel(G)}
+          </div>
+        </div>
+        <button class="btn big" data-finishsetup>🚪 Open My Diner!</button>
+      </div>`;
+  }
+
+  private nameSection(c: RestaurantConfig): string {
+    const presets = ["Grandma's Diner", "Yummy Town", "Pip's Place", "Tasty Castle", "Happy Plate"];
+    const btns = presets.map((p) => `<button class="chip name-preset" data-namepreset="${p}">${p}</button>`).join("");
+    return `
+      <div class="cz-group">
+        <div class="cz-title">✏️ Restaurant Name</div>
+        <input class="name-input" data-name maxlength="22" value="${escapeAttr(c.name)}" placeholder="My Diner" />
+        <div class="chip-list">${btns}</div>
+      </div>`;
+  }
+
+  /** The shared colour/menu/pet/look editor used by setup + the manage screen.
+   *  One category is shown at a time (picked from a friendly icon bar) so a young
+   *  kid sees a focused, un-cluttered set of choices instead of a wall of swatches. */
+  private customizerHtml(G: GameState): string {
+    const bar = CZ_CATS.map(([k, ic, nm]) =>
+      `<button class="cz-cat${k === this.czCat ? " on" : ""}" data-czcat="${k}">
+         <span class="cz-cat-ic">${ic}</span><span class="cz-cat-nm">${nm}</span></button>`,
+    ).join("");
+    return `
+      <div class="cz" data-cz-root>
+        <div class="cz-cats">${bar}</div>
+        <div class="cz-section" data-cz-section>${this.czSection(G)}</div>
+      </div>`;
+  }
+
+  /** The controls for the currently-open customizer category. */
+  private czSection(G: GameState): string {
+    const c = this.ctrl.config();
+    switch (this.czCat) {
+      case "menu":
+        return `<div class="cz-group">
+          <div class="cz-title">🍽️ Your Menu — what your guests order</div>
+          <div class="cz-hint">Tap to add or remove a food. Locked foods unlock as you play!</div>
+          <div class="chip-list big">${this.menuChips(G)}</div>
+        </div>`;
+      case "chef":
+        return `<div class="cz-group">
+          <div class="cz-title">🧑‍🍳 Chef Pip — that's you!</div>
+          ${this.swatchRow("Apron", "chef.apron", c.chef.apron, SWATCHES)}
+          ${this.swatchRow("Trim", "chef.accent", c.chef.accent, SWATCHES)}
+          ${this.swatchRow("Skin", "chef.skin", c.chef.skin, TONE_SWATCHES)}
+          ${this.swatchRow("Hat", "chef.hat", c.chef.hat, SWATCHES)}
+          ${this.swatchRow("Hair", "chef.hair", c.chef.hair, TONE_SWATCHES)}
+        </div>`;
+      case "pet":
+        return `<div class="cz-group">
+          <div class="cz-title">🐾 Your Pet Pal</div>
+          <div class="cz-hint">Pick your friend, then colour them in.</div>
+          <div class="chip-list big">${this.petChips(G)}</div>
+          ${this.swatchRow("Fur", "pet.body", c.pet.body, TONE_SWATCHES)}
+          ${this.swatchRow("Belly", "pet.belly", c.pet.belly, TONE_SWATCHES)}
+          ${this.swatchRow("Ears", "pet.accent", c.pet.accent, SWATCHES)}
+        </div>`;
+      case "diner":
+        return `<div class="cz-group">
+          <div class="cz-title">🏠 The Diner</div>
+          ${this.swatchRow("Walls", "palette.wall", c.palette.wall, SWATCHES)}
+          ${this.swatchRow("Floor", "palette.floorA", c.palette.floorA, SWATCHES)}
+          ${this.swatchRow("Tiles", "palette.floorB", c.palette.floorB, SWATCHES)}
+          ${this.swatchRow("Stripe", "palette.stripe", c.palette.stripe, SWATCHES)}
+          ${this.swatchRow("Windows", "palette.window", c.palette.window, SWATCHES)}
+        </div>`;
+      case "tables":
+        return `<div class="cz-group">
+          <div class="cz-title">🪑 Tables &amp; Chairs</div>
+          ${this.swatchRow("Top", "table.top", c.table.top, SWATCHES)}
+          ${this.swatchRow("Rim", "table.rim", c.table.rim, SWATCHES)}
+          ${this.swatchRow("Legs", "table.leg", c.table.leg, SWATCHES)}
+          ${this.swatchRow("Chairs", "table.chair", c.table.chair, SWATCHES)}
+        </div>`;
+      case "gear":
+        return `<div class="cz-group">
+          <div class="cz-title">🍳 Kitchen Gear</div>
+          ${this.swatchRow("Body", "station.body", c.station.body, SWATCHES)}
+          ${this.swatchRow("Trim", "station.trim", c.station.trim, SWATCHES)}
+        </div>`;
+      case "flowers":
+        return `<div class="cz-group">
+          <div class="cz-title">🌸 Flowers</div>
+          <div class="cz-row col"><span class="cz-label">Type</span><div class="chip-list">${this.plantTypeChips(c)}</div></div>
+          ${c.plants.map((p, i) => this.swatchRow(`Pot ${i + 1}`, `plants.${i}.bloom`, p.bloom, SWATCHES)).join("")}
+        </div>`;
+    }
+  }
+
+  private plantTypeChips(c: RestaurantConfig): string {
+    const types = ["🌼 Daisy", "🌷 Tulip", "🌹 Rose", "🌻 Bloom"];
+    const cur = c.plants[0]?.kind ?? 0;
+    return types.map((t, i) => {
+      const [ic, nm] = t.split(" ");
+      return `<button class="chip${i === cur ? " on" : ""}" data-planttype="${i}"><span class="chip-ic">${ic}</span><span class="chip-tx">${nm}</span></button>`;
+    }).join("");
+  }
+
+  private menuChips(G: GameState): string {
+    const c = this.ctrl.config();
+    return FOOD_OPTIONS.map((f) => {
+      const unlocked = foodUnlocked(G.unlocks, f.id);
+      const on = c.menu.includes(f.id);
+      return `<button class="chip food${on ? " on" : ""}${unlocked ? "" : " locked"}" data-menu="${f.id}" ${unlocked ? "" : "disabled"}>
+        <span class="chip-ic">${unlocked ? f.icon : "🔒"}</span><span class="chip-tx">${f.name}</span></button>`;
+    }).join("");
+  }
+
+  private petChips(G: GameState): string {
+    const c = this.ctrl.config();
+    return PET_OPTIONS.map((p) => {
+      const unlocked = petUnlocked(G.unlocks, p.kind);
+      const on = c.pet.kind === p.kind;
+      return `<button class="chip pet${on ? " on" : ""}${unlocked ? "" : " locked"}" data-petkind="${p.kind}" ${unlocked ? "" : "disabled"}>
+        <span class="chip-ic">${unlocked ? p.icon : "🔒"}</span><span class="chip-tx">${p.name}</span></button>`;
+    }).join("");
+  }
+
+  private swatchRow(label: string, path: string, current: number, swatches: { hex: number; name: string }[]): string {
+    const btns = swatches.map((s) =>
+      `<button class="sw${s.hex === current ? " sel" : ""}" data-cz="${path}" data-hex="${s.hex}" title="${s.name}" style="background:#${hex(s.hex)}"></button>`,
+    ).join("");
+    return `<div class="cz-row"><span class="cz-label">${label}</span><div class="sw-list">${btns}</div></div>`;
+  }
+
+  private dayCompleteHtml(G: GameState): string {
+    const stars = G.stars;
+    const starRow = [1, 2, 3].map((i) => `<span class="star ${i <= stars ? "lit" : ""}">⭐</span>`).join("");
+    const cheer = stars >= 3 ? "Amazing!" : stars >= 2 ? "Great job!" : "Nice work!";
+    return `
+      <div class="overlay">
+        <div class="big-title">${cheer}</div>
+        <div class="subtitle">Day ${G.day} done — you made ${G.servedToday} friends happy! 🥰</div>
+        <div class="stars">${starRow}</div>
+        ${this.unlockToast(G)}
+        <button class="btn big" data-next>${G.day >= G.maxDay ? "🎉 Finish!" : "🛠️ Manage Diner"}</button>
+      </div>`;
+  }
+
+  private unlockToast(G: GameState): string {
+    if (!G.newUnlocks.length) return "";
+    const items = G.newUnlocks.map((k) => `<span class="ul-chip">${unlockLabel(k)}</span>`).join("");
+    return `<div class="toast"><span class="toast-h">✨ New unlocked!</span>${items}</div>`;
+  }
+
+  // ── Between-day manage (upgrade / decorate / arrange) ──
+  private manageHtml(G: GameState): string {
+    return `
+      <div class="overlay wide">
+        <div class="big-title">🛠️ Manage Your Diner</div>
+        <div class="subtitle">Day ${G.day} done! Pick an upgrade, redecorate, or move things around.</div>
+        ${this.unlockToast(G)}
+        <div class="tabs">
+          <button class="tab on" data-tab="upgrade">🎁 Upgrade</button>
+          <button class="tab" data-tab="decorate">🎨 Decorate</button>
+          <button class="tab" data-tab="arrange">🔀 Arrange</button>
+        </div>
+        <div class="tab-body">
+          <div class="tab-panel" data-panel="upgrade">${this.upgradePanel(G)}</div>
+          <div class="tab-panel" data-panel="decorate" hidden><div class="cz-panel">${this.customizerHtml(G)}</div></div>
+          <div class="tab-panel" data-panel="arrange" hidden>${this.arrangePanel(G)}</div>
+        </div>
+        <button class="btn big" data-finishmanage>▶ Start Day ${G.day + 1}</button>
+      </div>`;
+  }
+
+  private upgradePanel(G: GameState): string {
+    if (!G.treatChoices.length) {
+      return `<div class="picked">✓ Upgrade chosen! Tap a tab or start the day.</div>`;
+    }
+    const cards = G.treatChoices.map((id) => {
+      const t = TREATS.find((x) => x.id === id)!;
+      return `<button class="treat-card" data-treat="${id}">
+          <div class="tc-icon">${t.icon}</div>
+          <div class="tc-name">${t.name}</div>
+          <div class="tc-blurb">${t.blurb}</div>
+        </button>`;
+    }).join("");
+    return `<div class="subtitle small">Pick one to make tomorrow even more fun!</div><div class="treats">${cards}</div>`;
+  }
+
+  private arrangePanel(G: GameState): string {
+    return `
+      <div class="arr-group">
+        <div class="cz-title" data-arrtitle>🔀 Drag tables &amp; equipment (${G.tables.length}/${MAX_TABLES} tables)</div>
+        <div class="floor-map" data-map>${this.mapTokens(G)}</div>
+        <div class="map-legend">🍽️ tables (front) · 🍳 equipment (back wall)</div>
+        <div class="row">
+          <button class="btn ghost" data-addtable>➕ Table</button>
+          <button class="btn ghost" data-removetable>➖ Table</button>
+        </div>
+      </div>`;
+  }
+
+  private mapTokens(G: GameState): string {
+    const kitchen = `<div class="map-kitchen"></div><div class="map-doormat"></div>`;
+    const tables = G.tables.map((t, i) => this.mapToken("table", String(i), "🍽️", t.x, t.z)).join("");
+    const stations = G.stations.filter((s) => s.kind !== "trash")
+      .map((s) => this.mapToken("station", s.id, iconForStation(s.id), s.x, s.z)).join("");
+    return kitchen + tables + stations;
+  }
+
+  private mapToken(kind: string, id: string, icon: string, x: number, z: number): string {
+    const [px, py] = worldToMapPct(x, z);
+    return `<button class="map-token ${kind}" data-token="${kind}:${id}" style="left:${px}%;top:${py}%">${icon}</button>`;
+  }
+
+  private winHtml(G: GameState): string {
+    return `
+      <div class="overlay">
+        <div class="title-logo win">YOU DID IT! 🎉</div>
+        <div class="subtitle">${escapeHtml(G.config.name)} is the happiest place in town! 💛</div>
+        <div class="stars big">${"⭐".repeat(3)}</div>
+        <div class="panel small"><div class="muted">Final score: <b>${G.coins}</b> 🪙</div></div>
+        <button class="btn big" data-play>▶ Play Again</button>
+      </div>`;
+  }
+
+  private pauseHtml(): string {
+    const meta = loadMeta();
+    return `
+      <div class="overlay">
+        <div class="big-title">Paused</div>
+        <button class="btn big" data-resume>▶ Resume</button>
+        <div class="row">
+          <button class="btn ghost" data-mute>${muteLabel(meta.muted)}</button>
+          <button class="btn ghost" data-qual>${qualLabel(meta.quality)}</button>
+        </div>
+        <button class="btn ghost" data-quit>🏠 Save &amp; Quit to Title</button>
+      </div>`;
+  }
+
+  showPause(show: boolean): void {
+    if (show) {
+      this.screens.innerHTML = this.pauseHtml();
+      this.wirePause();
+    } else if (this.lastPhase === "playing") {
+      this.screens.innerHTML = "";
+    }
+  }
+
+  private wireScreens(G: GameState): void {
+    this.screens.querySelector("[data-play]")?.addEventListener("click", () => this.ctrl.play());
+    this.screens.querySelector("[data-continue]")?.addEventListener("click", () => this.ctrl.continueRun());
+    this.screens.querySelector("[data-next]")?.addEventListener("click", () => this.ctrl.nextFromDayComplete());
+    this.screens.querySelector("[data-finishsetup]")?.addEventListener("click", () => this.ctrl.finishSetup());
+    this.screens.querySelector("[data-finishmanage]")?.addEventListener("click", () => this.ctrl.finishManage());
+    if (G.phase === "setup" || G.phase === "manage") this.wireCustomizer(G);
+    if (G.phase === "setup") this.wireArrange(G);
+    if (G.phase === "manage") { this.wireTabs(); this.wireUpgrade(); this.wireArrange(G); }
+    this.bindToggles();
+  }
+
+  private wireTabs(): void {
+    const tabs = Array.from(this.screens.querySelectorAll("[data-tab]")) as HTMLElement[];
+    const panels = Array.from(this.screens.querySelectorAll("[data-panel]")) as HTMLElement[];
+    tabs.forEach((t) => t.addEventListener("click", () => {
+      const key = t.dataset.tab!;
+      tabs.forEach((x) => x.classList.toggle("on", x === t));
+      panels.forEach((p) => { p.hidden = p.dataset.panel !== key; });
+    }));
+  }
+
+  private wireUpgrade(): void {
+    this.screens.querySelectorAll("[data-treat]").forEach((el) =>
+      el.addEventListener("click", () => {
+        const id = (el as HTMLElement).dataset.treat as TreatId;
+        this.ctrl.chooseTreat(id);
+        const panel = this.screens.querySelector('[data-panel="upgrade"]');
+        if (panel) panel.innerHTML = `<div class="picked">✓ Upgrade chosen! Tap a tab or start the day.</div>`;
+      }),
     );
-    if (won) this.ctx.fx.confetti();
+  }
+
+  private wireArrange(G: GameState): void {
+    const map = this.screens.querySelector("[data-map]") as HTMLElement | null;
+    if (map) this.wireMapTokens(map);
+    this.screens.querySelector("[data-addtable]")?.addEventListener("click", () => {
+      this.ctrl.addTable();
+      this.refreshMap(G);
+    });
+    this.screens.querySelector("[data-removetable]")?.addEventListener("click", () => {
+      this.ctrl.removeTable();
+      this.refreshMap(G);
+    });
+  }
+
+  private refreshMap(G: GameState): void {
+    const map = this.screens.querySelector("[data-map]") as HTMLElement | null;
+    if (map) { map.innerHTML = this.mapTokens(G); this.wireMapTokens(map); }
+    const title = this.screens.querySelector("[data-arrtitle]");
+    if (title) title.textContent = `🔀 Drag tables & equipment (${G.tables.length}/${MAX_TABLES} tables)`;
+  }
+
+  /** Pointer drag: move a token on the top-down map → live 3D reposition. */
+  private wireMapTokens(map: HTMLElement): void {
+    map.querySelectorAll("[data-token]").forEach((node) => {
+      const el = node as HTMLElement;
+      el.addEventListener("pointerdown", (ev: Event) => {
+        const pe = ev as PointerEvent;
+        pe.preventDefault();
+        const [kind, id] = el.dataset.token!.split(":");
+        el.classList.add("dragging");
+        try { el.setPointerCapture(pe.pointerId); } catch { /* ignore */ }
+        const onMove = (e: Event): void => {
+          const me = e as PointerEvent;
+          const r = map.getBoundingClientRect();
+          const px = clamp01((me.clientX - r.left) / r.width);
+          const py = clamp01((me.clientY - r.top) / r.height);
+          let [x, z] = mapPctToWorld(px, py);
+          if (kind === "table") { x = clampN(x, -11, 11); z = clampN(z, -2.2, 5.6); }
+          else { x = clampN(x, -11.5, 11.5); z = clampN(z, -9, -5.2); }
+          const [rx, ry] = worldToMapPct(x, z);
+          el.style.left = `${rx}%`;
+          el.style.top = `${ry}%`;
+          if (kind === "table") this.ctrl.moveTable(Number(id), x, z);
+          else this.ctrl.moveStation(id as StationId, x, z);
+        };
+        const onUp = (): void => {
+          el.classList.remove("dragging");
+          el.removeEventListener("pointermove", onMove);
+          el.removeEventListener("pointerup", onUp);
+          el.removeEventListener("pointercancel", onUp);
+        };
+        el.addEventListener("pointermove", onMove);
+        el.addEventListener("pointerup", onUp);
+        el.addEventListener("pointercancel", onUp);
+      });
+    });
+  }
+
+  /** Wire the customizer: the category bar (switch sections), the name field, and
+   *  the controls inside the currently-open section. */
+  private wireCustomizer(G: GameState): void {
+    this.work = cloneConfig(this.ctrl.config());
+
+    // Category bar — switch which section is shown, and tell the preview what to frame.
+    this.screens.querySelectorAll("[data-czcat]").forEach((el) =>
+      el.addEventListener("click", () => {
+        this.czCat = (el as HTMLElement).dataset.czcat as CzCat;
+        this.screens.querySelectorAll("[data-czcat]").forEach((b) => b.classList.toggle("on", b === el));
+        const sec = this.screens.querySelector("[data-cz-section]");
+        if (sec) { sec.innerHTML = this.czSection(G); this.wireCzControls(); }
+        this.ctrl.setStudioFocus(CZ_FOCUS[this.czCat], this.czCat);
+      }),
+    );
+
+    // Name field (lives outside the category section, in setup).
+    const nameInput = this.screens.querySelector("[data-name]") as HTMLInputElement | null;
+    nameInput?.addEventListener("input", () => { this.work!.name = nameInput.value; this.applyWork(); });
+    this.screens.querySelectorAll("[data-namepreset]").forEach((el) =>
+      el.addEventListener("click", () => {
+        this.work!.name = (el as HTMLElement).dataset.namepreset!;
+        if (nameInput) nameInput.value = this.work!.name;
+        this.applyWork();
+      }),
+    );
+
+    this.ctrl.setStudioFocus(CZ_FOCUS[this.czCat], this.czCat);
+    this.wireCzControls();
+  }
+
+  private applyWork(): void { this.ctrl.setConfig(this.work!); }
+
+  /** Wire the swatch / menu / pet / plant controls inside the current section. */
+  private wireCzControls(): void {
+    const sec = this.screens.querySelector("[data-cz-section]") ?? this.screens;
+    sec.querySelectorAll("[data-cz]").forEach((el) =>
+      el.addEventListener("click", () => {
+        setPath(this.work!, (el as HTMLElement).dataset.cz!, parseInt((el as HTMLElement).dataset.hex!, 16));
+        this.applyWork();
+        el.parentElement!.querySelectorAll(".sw").forEach((b) => b.classList.toggle("sel", b === el));
+      }),
+    );
+    sec.querySelectorAll("[data-menu]").forEach((el) =>
+      el.addEventListener("click", () => {
+        const id = (el as HTMLElement).dataset.menu as FoodId;
+        const m = this.work!.menu;
+        const idx = m.indexOf(id);
+        if (idx >= 0) { if (m.length > 1) m.splice(idx, 1); } else m.push(id);
+        this.applyWork();
+        el.classList.toggle("on", this.work!.menu.includes(id));
+      }),
+    );
+    sec.querySelectorAll("[data-petkind]").forEach((el) =>
+      el.addEventListener("click", () => {
+        this.work!.pet.kind = (el as HTMLElement).dataset.petkind as PetKind;
+        this.applyWork();
+        sec.querySelectorAll("[data-petkind]").forEach((b) => b.classList.toggle("on", b === el));
+      }),
+    );
+    sec.querySelectorAll("[data-planttype]").forEach((el) =>
+      el.addEventListener("click", () => {
+        const kind = Number((el as HTMLElement).dataset.planttype);
+        this.work!.plants.forEach((p) => { p.kind = kind; });
+        this.applyWork();
+        sec.querySelectorAll("[data-planttype]").forEach((b) => b.classList.toggle("on", b === el));
+      }),
+    );
+  }
+
+  private wirePause(): void {
+    this.screens.querySelector("[data-resume]")?.addEventListener("click", () => this.ctrl.resume());
+    this.screens.querySelector("[data-quit]")?.addEventListener("click", () => this.ctrl.quitToTitle());
+    this.bindToggles();
+  }
+
+  private bindToggles(): void {
+    this.muteBtns = Array.from(this.screens.querySelectorAll("[data-mute]")) as HTMLElement[];
+    this.qualBtns = Array.from(this.screens.querySelectorAll("[data-qual]")) as HTMLElement[];
+    this.muteBtns.forEach((b) => b.addEventListener("click", () => { this.ctrl.toggleMute(); this.refreshToggleLabels(); }));
+    this.qualBtns.forEach((b) => b.addEventListener("click", () => { this.ctrl.toggleQuality(); this.refreshToggleLabels(); }));
+  }
+
+  private refreshToggleLabels(): void {
+    const meta = loadMeta();
+    this.muteBtns.forEach((b) => (b.textContent = muteLabel(meta.muted)));
+    this.qualBtns.forEach((b) => (b.textContent = qualLabel(meta.quality)));
   }
 }
+
+type CzCat = "menu" | "chef" | "pet" | "diner" | "tables" | "gear" | "flowers";
+const CZ_CATS: Array<[CzCat, string, string]> = [
+  ["menu", "🍽️", "Food"],
+  ["chef", "🧑‍🍳", "Chef"],
+  ["pet", "🐾", "Pet"],
+  ["diner", "🏠", "Diner"],
+  ["tables", "🪑", "Tables"],
+  ["gear", "🍳", "Gear"],
+  ["flowers", "🌸", "Flowers"],
+];
+/** What the live preview should frame for a category: the characters, or the room. */
+const CZ_FOCUS: Record<CzCat, "chef" | "room"> = {
+  menu: "room", chef: "chef", pet: "chef", diner: "room", tables: "room", gear: "room", flowers: "room",
+};
+
+const muteLabel = (muted: boolean): string => (muted ? "🔇 Sound: Off" : "🔊 Sound: On");
+const qualLabel = (quality: "high" | "low"): string => `🎨 Graphics: ${quality === "high" ? "Fancy" : "Smooth"}`;
+
+const iconForStation = (id: StationId): string => {
+  switch (id) {
+    case "grill": case "hotgrill": return "🔥";
+    case "fryer": return "🍟";
+    case "soda": return "🥤";
+    case "icecream": return "🍦";
+    case "meat": return "🥩";
+    case "potato": return "🥔";
+    case "sausage": return "🌭";
+    default: return "📦";
+  }
+};
+
+/** Write a hex colour into a dotted config path (e.g. "chef.apron", "plants.0.bloom"). */
+function setPath(cfg: RestaurantConfig, path: string, val: number): void {
+  const parts = path.split(".");
+  if (parts[0] === "plants") {
+    const i = Number(parts[1]);
+    if (cfg.plants[i]) cfg.plants[i].bloom = val;
+    return;
+  }
+  const top = (cfg as unknown as Record<string, Record<string, number>>)[parts[0]];
+  if (top) top[parts[1]] = val;
+}
+
+const escapeHtml = (s: string): string => s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]!));
+const escapeAttr = (s: string): string => escapeHtml(s).replace(/"/g, "&quot;");

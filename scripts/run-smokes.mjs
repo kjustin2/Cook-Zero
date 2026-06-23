@@ -1,6 +1,5 @@
-// Test runner: boots a Vite dev server, runs every smoke script against it in
-// sequence (sharing the one server), then tears the server down. Exit code is
-// non-zero if any smoke fails. Usage: npm test
+// Test runner: boots one Vite dev server, runs every smoke against it, tears the
+// server down. Non-zero exit if any smoke fails. Usage: npm test
 import { spawn, spawnSync } from "node:child_process";
 import { platform } from "node:os";
 
@@ -8,18 +7,18 @@ const PORT = 5179;
 const URL = `http://localhost:${PORT}`;
 const SMOKES = [
   "smoke-boot.mjs",
-  "smoke-story.mjs",
-  "smoke-adjacency.mjs",
-  "smoke-economy.mjs",
   "smoke-cook.mjs",
-  "smoke-tables.mjs",
-  "smoke-events.mjs",
-  "smoke-systems.mjs",
+  "smoke-instant.mjs",
+  "smoke-wayfinder.mjs",
+  "smoke-customers.mjs",
   "smoke-balance.mjs",
-  "smoke-features.mjs",
-  "smoke-perf.mjs",
+  "smoke-pet-garden.mjs",
+  "smoke-setup.mjs",
+  "smoke-scenarios.mjs",
+  "smoke-save.mjs",
   "smoke-flow.mjs",
-  "smoke-input.mjs",
+  "smoke-story.mjs",
+  "smoke-perf.mjs",
   "smoke-playthrough.mjs",
   "smoke-soak.mjs",
 ];
@@ -28,11 +27,7 @@ const isWin = platform() === "win32";
 
 function startServer() {
   const cmd = isWin ? "npx.cmd" : "npx";
-  const srv = spawn(cmd, ["vite", "--port", String(PORT), "--strictPort"], {
-    stdio: "ignore",
-    shell: isWin,
-  });
-  return srv;
+  return spawn(cmd, ["vite", "--port", String(PORT), "--strictPort"], { stdio: "ignore", shell: isWin });
 }
 
 async function waitForServer(timeoutMs = 30000) {
@@ -53,19 +48,12 @@ function killTree(pid) {
   if (!pid) return;
   if (isWin) spawnSync("taskkill", ["/pid", String(pid), "/T", "/F"], { stdio: "ignore" });
   else {
-    try {
-      process.kill(-pid, "SIGKILL");
-    } catch {
-      try { process.kill(pid, "SIGKILL"); } catch { /* gone */ }
-    }
+    try { process.kill(-pid, "SIGKILL"); } catch { try { process.kill(pid, "SIGKILL"); } catch { /* gone */ } }
   }
 }
 
 function runSmoke(file) {
-  const res = spawnSync(process.execPath, ["scripts/" + file], {
-    stdio: "inherit",
-    env: { ...process.env, SR_URL: URL },
-  });
+  const res = spawnSync(process.execPath, ["scripts/" + file], { stdio: "inherit", env: { ...process.env, SR_URL: URL } });
   return res.status === 0;
 }
 
@@ -82,13 +70,11 @@ console.log(`→ server up at ${URL}\n`);
 let failed = 0;
 for (const file of SMOKES) {
   console.log(`──── ${file} ────`);
-  const ok = runSmoke(file);
-  if (!ok) failed++;
+  if (!runSmoke(file)) failed++;
   console.log("");
 }
 
 killTree(server.pid);
-
 console.log("════════════════════════════");
 console.log(failed === 0 ? "✅ ALL SMOKE TESTS PASSED" : `❌ ${failed} SMOKE SUITE(S) FAILED`);
 process.exit(failed === 0 ? 0 : 1);

@@ -1,121 +1,54 @@
-// Customer lifecycle: arrival pacing (scaled by reputation, vibe and pricing),
-// walking in to a free table, sitting with an order, patience, and the served /
-// stormed-off walk-offs to the exit. A customer IS the order — no ticket list.
+// Customer lifecycle: a gentle trickle of guests who walk in, sit at a free
+// table with a big picture order, wait (patiently!), and stroll out happy when
+// served. A guest IS the order — no ticket list. Nobody is ever punished hard:
+// if a guest gives up they just leave a little sad, with no score penalty.
 
-import type { Customer, CustomerKind, GameState, Recipe } from "./types";
+import type { Customer, GameState } from "./types";
 import type { Ctx } from "./ctx";
-import { RECIPES } from "./catalog";
-import { SHIFT_LEN, SPAWN_BASE, REP_EXPIRE, CUSTOMER_KINDS } from "./balance";
-import { ENTRANCE, EXIT, seatOf } from "./dining";
-import { nextUid } from "./state";
-import { clamp, lerp, dist } from "../core/math";
+import { activeMenu } from "./catalog";
+import { FLOOR, PATIENCE } from "./balance";
+import { clamp, damp } from "../core/math";
 
-const WALK_SPEED = 3.2;
-const LEAVE_SPEED = 3.4;
-const STORM_SPEED = 5.0;
+const ENTRANCE = { x: 0, z: FLOOR.maxZ - 0.3 };
+const EXIT = { x: 0, z: FLOOR.maxZ + 2.0 };
+const WALK = 3.4;
+const LEAVE = 3.6;
+const SIT_CELEBRATE = 1.8; // seconds beaming in the seat after being served
 
-export function basePatience(s: GameState): number {
-  return clamp(52 - s.day * 3, 24, 52) * s.derived.patience;
-}
-
-export function spawnInterval(s: GameState): number {
-  const dayScale = 1 - (s.day - 1) * 0.06; // busier later in the run
-  const progress = 1 - s.dayTime / SHIFT_LEN;
-  const ramp = lerp(1.15, 0.78, progress); // crowd builds through the shift
-  const base = (SPAWN_BASE * dayScale * ramp) / Math.max(0.4, s.derived.spawnMult);
-  return Math.max(1.4, base);
-}
-
-function availableRecipes(s: GameState): Recipe[] {
-  return RECIPES.filter((r) => r.minDay <= s.day);
-}
-
-function freeTable(s: GameState): number {
-  const used = new Set(s.customers.filter((c) => c.state !== "leaving").map((c) => c.spot));
-  for (let i = 0; i < s.tables.length; i++) if (!used.has(i)) return i;
+function freeTable(G: GameState): number {
+  for (let i = 0; i < G.tables.length; i++) if (G.tables[i].occupied === 0) return i;
   return -1;
 }
 
-function rollKind(ctx: Ctx): CustomerKind {
-  const { G, rng } = ctx;
-  const repNorm = clamp(G.rep / 100, 0, 1);
-  const vipBoost = G.modifier?.vipBoost ?? 0;
-  const vipChance = clamp(0.05 + repNorm * 0.08 + (G.day - 1) * 0.01 + vipBoost, 0, 0.4);
-  const criticChance = G.day >= 2 ? 0.08 : 0;
-  if (rng.chance(vipChance)) return "vip";
-  if (rng.chance(criticChance)) return "critic";
-  return "normal";
-}
-
-function makeLook(rng: Ctx["rng"]): { skin: number; shirt: number; hair: number; hat: boolean } {
-  return { skin: rng.int(0, 5), shirt: rng.int(0, 7), hair: rng.int(0, 6), hat: rng.chance(0.25) };
-}
-
-/** Controlled tutorial: keep exactly one patient burger guest seated so the
- *  player can practice the full cook→serve loop without crowd pressure. */
-function ensureTutorialGuest(ctx: Ctx): void {
-  const { G, rng } = ctx;
-  if (G.customers.some((c) => c.state !== "leaving")) return;
-  const spot = freeTable(G);
-  if (spot < 0) return;
-  const burger = RECIPES.find((r) => r.id === "burger") ?? RECIPES[0];
-  const kd = CUSTOMER_KINDS.normal;
-  G.customers.push({
-    uid: nextUid(), recipe: burger, kind: "normal", payMult: kd.pay, repMult: kd.rep,
-    spot, x: ENTRANCE.x, z: ENTRANCE.z, state: "walkin",
-    patience: 999, maxPatience: 999, anger: 0, servedT: 0, happy: false,
-    look: makeLook(rng), bob: rng.range(0, Math.PI * 2), face: 0, walk: 0,
-  });
+function makeLook(rng: Ctx["rng"]): Customer["look"] {
+  return { body: rng.int(0, 7), hair: rng.int(0, 6), hat: rng.chance(0.3), hue: rng.next() };
 }
 
 function spawnCustomer(ctx: Ctx): void {
   const { G, rng } = ctx;
-  const spot = freeTable(G);
-  if (spot < 0) return; // restaurant is full — they'll come back later
-  const pool = availableRecipes(G);
-  const recipe = rng.weighted(pool.map((r) => ({ item: r, weight: r.weight })));
-  const kind = rollKind(ctx);
-  const kd = CUSTOMER_KINDS[kind];
-  const maxP = basePatience(G) * kd.patience;
+  const ti = freeTable(G);
+  if (ti < 0) return; // diner full — they'll arrive once a table frees up
+  const menu = activeMenu(G);
+  const order = rng.pick(menu).id;
+  const dayIdx = Math.max(0, Math.min(PATIENCE.length - 1, G.day - 1));
+  // The tutorial is utterly relaxed; real guests use the tuned patience curve.
+  const maxP = G.tutorial ? 90 : PATIENCE[dayIdx] * G.derived.patienceMult;
+  const uid = G.nextUid++;
+  G.tables[ti].occupied = uid;
   G.customers.push({
-    uid: nextUid(),
-    recipe,
-    kind,
-    payMult: kd.pay,
-    repMult: kd.rep,
-    spot,
-    x: ENTRANCE.x,
-    z: ENTRANCE.z,
-    state: "walkin",
-    patience: maxP,
-    maxPatience: maxP,
-    anger: 0,
-    servedT: 0,
-    happy: false,
+    uid, order, table: ti,
+    x: ENTRANCE.x, z: ENTRANCE.z, state: "entering",
+    patience: maxP, maxPatience: maxP,
+    served: false, servedT: 0, mood: 1, hop: 0,
     look: makeLook(rng),
-    bob: rng.range(0, Math.PI * 2),
-    face: 0,
-    walk: 0,
   });
 }
 
-function expire(ctx: Ctx, c: Customer): void {
-  const { G } = ctx;
-  c.state = "leaving";
-  c.happy = false;
-  c.anger = 1;
-  G.stats.expired++;
-  G.dayStats.expired++;
-  G.combo = 0;
-  G.comboTimer = 0;
-  G.rep = clamp(G.rep + REP_EXPIRE * (c.repMult ?? 1), 0, 100);
-  ctx.sfx.error();
-  ctx.fx.float(c.kind === "critic" ? "✗ 1★" : "✗", c.x, c.z, { color: "#ff5a5a", big: true });
-  ctx.fx.shake(c.kind === "critic" ? 0.2 : 0.12);
+function freeUp(G: GameState, c: Customer): void {
+  const tb = G.tables[c.table];
+  if (tb && tb.occupied === c.uid) tb.occupied = 0;
 }
 
-/** Move a customer toward a target point; returns true on arrival. Faces the
- *  heading and advances the walk gait so the rig animates a real walk. */
 function moveTo(c: Customer, tx: number, tz: number, speed: number, dt: number): boolean {
   const dx = tx - c.x;
   const dz = tz - c.z;
@@ -127,77 +60,83 @@ function moveTo(c: Customer, tx: number, tz: number, speed: number, dt: number):
   }
   c.x += (dx / d) * speed * dt;
   c.z += (dz / d) * speed * dt;
-  c.face = Math.atan2(dx, dz); // rig forward is +z, so face the travel direction
-  c.walk += dt * (5 + speed);
   return false;
 }
 
 export function updateCustomers(ctx: Ctx, dt: number): void {
   const { G } = ctx;
-  const tutorial = G.tutorial >= 0;
 
-  // Spawn pacing — suppressed during the controlled tutorial, which instead
-  // keeps a single patient guest waiting.
-  if (tutorial) {
-    ensureTutorialGuest(ctx);
-  } else {
+  // Spawn pacing: a calm trickle, only while guests remain to arrive.
+  if (G.spawnQueue > 0) {
     G.spawnTimer -= dt;
-    if (G.spawnTimer <= 0) {
+    if (G.spawnTimer <= 0 && freeTable(G) >= 0) {
       spawnCustomer(ctx);
-      G.spawnTimer = spawnInterval(G);
+      G.spawnQueue -= 1;
+      G.spawnTimer = G.spawnGap;
     }
   }
 
   for (const c of G.customers) {
-    c.bob += dt;
-    const table = G.tables[c.spot];
-    const seat = table ? seatOf(table) : null;
+    if (c.hop > 0) c.hop = Math.max(0, c.hop - dt * 2);
+    const tb = G.tables[c.table];
     switch (c.state) {
-      case "walkin": {
-        if (seat && moveTo(c, seat.x, seat.z, WALK_SPEED, dt)) {
-          c.state = "waiting";
+      case "entering": {
+        if (tb && moveTo(c, tb.seatX, tb.seatZ, WALK, dt)) {
+          c.state = "seated";
           c.patience = c.maxPatience;
-          c.face = 0; // settle in facing the kitchen / camera
         }
         break;
       }
-      case "waiting": {
-        c.face = 0; // seated, facing out toward the kitchen
-        // Tutorial guests are infinitely patient — they never fume or storm off.
-        if (!tutorial) {
-          c.patience -= dt;
-          c.anger = clamp(1 - c.patience / (c.maxPatience * 0.45), 0, 1);
-          if (c.anger > 0.55 && ctx.rng.chance(dt * 0.5)) {
-            ctx.fx.float("💢", c.x + 0.5, c.z + 1.0, { color: "#ff7a7a" });
+      case "seated": {
+        if (c.served) {
+          c.servedT += dt;
+          c.mood = 1;
+          if (c.servedT > SIT_CELEBRATE) {
+            c.state = "leaving";
+            freeUp(G, c);
           }
-          if (c.patience <= 0) expire(ctx, c);
+        } else {
+          c.patience -= dt;
+          const ratio = c.patience / c.maxPatience;
+          c.mood = damp(c.mood, clamp(ratio, 0, 1), 3, dt);
+          // Gentle "please hurry!" nudge before a guest gives up — so it's never
+          // a silent surprise for the kid.
+          if (ratio < 0.3 && ctx.rng.chance(dt * 0.7)) {
+            ctx.fx.float("🙏", c.x + 0.5, c.z + 1.0, { color: "#ffb84a" });
+          }
+          if (c.patience <= 0) {
+            // Gives up — leaves a touch sad. No score penalty; just resets the
+            // streak. Kindest possible "failure".
+            c.state = "leaving";
+            c.mood = 0;
+            freeUp(G, c);
+            G.combo = 0;
+            G.comboT = 0;
+            ctx.sfx.sad();
+            ctx.fx.float("😞", c.x, c.z + 0.9, { color: "#9bb0c4" });
+          }
         }
-        break;
-      }
-      case "served": {
-        c.face = 0; // still in the seat, beaming at the kitchen
-        c.servedT += dt;
-        if (c.servedT > 0.7) c.state = "leaving";
         break;
       }
       case "leaving": {
-        moveTo(c, EXIT.x, EXIT.z, c.happy ? LEAVE_SPEED : STORM_SPEED, dt);
+        moveTo(c, EXIT.x, EXIT.z, LEAVE, dt);
         break;
       }
     }
   }
 
-  // Reap customers that reached the exit.
-  G.customers = G.customers.filter((c) => !(c.state === "leaving" && dist(c.x, c.z, EXIT.x, EXIT.z) < 1.2));
+  G.customers = G.customers.filter(
+    (c) => !(c.state === "leaving" && Math.hypot(c.x - EXIT.x, c.z - EXIT.z) < 1.0),
+  );
 }
 
-/** Combo decay between serves (called from the sim each frame). */
-export function updateCombo(s: GameState, dt: number): void {
-  if (s.combo > 0) {
-    s.comboTimer -= dt;
-    if (s.comboTimer <= 0) {
-      s.combo = 0;
-      s.comboTimer = 0;
+/** Combo cools off if you take too long between serves (purely cosmetic). */
+export function updateCombo(G: GameState, dt: number): void {
+  if (G.combo > 0) {
+    G.comboT -= dt;
+    if (G.comboT <= 0) {
+      G.combo = 0;
+      G.comboT = 0;
     }
   }
 }

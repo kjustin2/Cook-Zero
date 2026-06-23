@@ -1,7 +1,6 @@
-// Boot + state machine + main loop. Wires every system through the Ctx hub and
-// drives the phase machine:
-//   title → playing → dayEnd → manage ⇄ build → playing … → win | gameOver
-// Exposes window.__G / window.__SR for headless smoke tests.
+// Boot + phase machine + main loop. Wires every system through the Ctx hub:
+//   title → cutscene(intro) → playing → dayComplete → treat → … → cutscene(win) → win
+// The run is always winnable. Exposes window.__G / window.__SR for headless tests.
 
 import "@fontsource/baloo-2/latin-700.css";
 import "@fontsource/baloo-2/latin-800.css";
@@ -11,22 +10,20 @@ import "@fontsource/nunito/latin-800.css";
 import "./style.css";
 import { Input } from "./core/input";
 import { RNG } from "./core/rng";
-import { loadMeta, saveMeta } from "./core/save";
-import { createState, resetRun } from "./game/state";
-import { recomputeDerived } from "./game/adjacency";
-import { makeItem } from "./game/state";
-import { place, removeAt, itemAt, items, worldOfCell } from "./game/grid";
+import { loadMeta, saveMeta, loadRun, saveRun, clearRun, hasRun } from "./core/save";
+import { createState, resetRun, recomputeDerived, stationById, applyConfig, toggleTableAt, swapStations, addTable, removeTable, moveTable, moveStation } from "./game/state";
 import type { Ctx } from "./game/ctx";
-import { updatePlaying } from "./game/sim";
+import type { FoodId, RestaurantConfig, StationId } from "./game/types";
+import { newlyUnlocked, unlockedFor } from "./game/customize";
+import { CHEF_REACH } from "./game/balance";
+import { updatePlaying, shiftOver } from "./game/sim";
 import { actionFor } from "./game/interact";
+import { runScenario, SCENARIOS, type ScenarioApi } from "./game/scenarios";
 import { startDash } from "./game/chef";
-import { startDay, finishDay, prepareManage, computeStars } from "./game/flow";
-import { startCutscene, advanceCutscene, skipCutscene, tickCutscene } from "./game/cutscene";
-import { INTRO, WIN_STORY, LOSE_STORY, storyForDay } from "./game/story";
-import { applyUpgrade } from "./game/upgrades";
-import { TOTAL_DAYS } from "./game/balance";
-import { buildClick, enterBuild, exitBuild, rotateCursor, sellHovered } from "./game/placement";
-import { buyItem, hireHelper } from "./game/shop";
+import { startDay, finishDay, computeStars, prepareTreats } from "./game/flow";
+import { startCutscene, tickCutscene, skipCutscene } from "./game/cutscene";
+import { introScene, storyForDay, winScene, tutorialDoneScene } from "./game/story";
+import { chooseTreat } from "./game/upgrades";
 import { Stage } from "./render/stage";
 import { SceneView } from "./render/sceneView";
 import { FxSystem } from "./render/fx";
@@ -43,33 +40,57 @@ const input = new Input();
 const rng = new RNG(seed);
 const stage = new Stage(canvas);
 const view = new SceneView(stage, G);
-const fx = new FxSystem(stage.scene, stage, G);
+const fx = new FxSystem(stage.scene, stage);
 const sfx = new WebSfx();
 const music = new WebMusic();
 
 const ctx: Ctx = { G, input, rng, fx, sfx, music };
 
-// Apply persisted settings.
 if (G.muted) {
   sfx.setMuted(true);
   music.setMuted(true);
 }
 stage.applyQuality(G.quality);
 
-/** Setup hub before a night: shop + rearrange + decorate. */
-function toSetup(): void {
-  prepareManage(ctx);
-  G.phase = "manage";
+// ── Phase transitions ────────────────────────────────────────────────────────
+
+function beginDay(): void {
+  startDay(ctx);
+  G.phase = "playing";
 }
 
-/** Begin the current night (G.day), playing its cutscene first if any. */
-function beginNight(): void {
-  const beats = G.day > 1 ? storyForDay(G.day) : null; // intro is shown before day 1's setup
-  if (beats) startCutscene(G, beats, () => { startDay(ctx); G.phase = "playing"; }, `Night ${G.day}`);
-  else {
-    startDay(ctx);
-    G.phase = "playing";
-  }
+/** The setup studio: name + menu + looks + layout, with a live 3D preview. */
+function enterSetup(): void {
+  G.phase = "setup";
+  music.cue("menu");
+}
+
+/** Leave setup → remember the chosen restaurant → open for the real first day. */
+function finishSetup(): void {
+  const meta = loadMeta();
+  meta.config = G.config;
+  saveMeta(meta);
+  saveRun(G);
+  sfx.star();
+  beginDay();
+}
+
+function startTutorial(): void {
+  G.tutorial = true;
+  G.day = 1;
+  music.cue("story");
+  startCutscene(G, introScene(), beginDay, "Intro");
+}
+
+/** Tutorial over → mark it done → a clear "Tutorial Complete!" beat → setup. */
+function finishTutorial(): void {
+  G.tutorial = false;
+  const meta = loadMeta();
+  meta.tutorialDone = true;
+  saveMeta(meta);
+  music.stop();
+  fx.confetti();
+  startCutscene(G, tutorialDoneScene(), enterSetup, "TutorialDone");
 }
 
 function newRun(): void {
@@ -78,38 +99,99 @@ function newRun(): void {
   const meta = loadMeta();
   meta.runs += 1;
   saveMeta(meta);
+  clearRun();
   G.day = 1;
-  G.tutorial = meta.tutorialDone ? -1 : 0;
-  // Intro story → then the setup hub so you can decorate before opening night 1.
-  startCutscene(G, INTRO, toSetup, "Night 1");
+  if (!meta.tutorialDone) startTutorial();
+  else enterSetup();
+}
+
+function continueRun(): void {
+  const snap = loadRun();
+  if (!snap) { newRun(); return; }
+  Object.assign(G, snap);
+  G.cutscene = null;
+  G.paused = false;
+  G.tutorial = false;
+  if (G.phase === "cutscene" || G.phase === "title") G.phase = "playing";
+  recomputeDerived(G);
+  if (G.phase === "playing") { music.cue("cooking"); music.setIntensity(0); }
+  else music.cue("menu");
+}
+
+function endShift(): void {
+  if (G.tutorial) { finishTutorial(); return; }
+  const meta = loadMeta();
+  const prevBest = meta.bestDay;
+  const res = finishDay(ctx); // saves bestDay/bestStars
+  // Reaching a new day can unlock new content (foods/pets/decor).
+  const fresh = newlyUnlocked(prevBest, Math.max(prevBest, G.day));
+  if (fresh.length) {
+    const m2 = loadMeta();
+    m2.unlocks = [...new Set([...m2.unlocks, ...unlockedFor(m2.bestDay)])];
+    saveMeta(m2);
+    G.unlocks = [...m2.unlocks];
+    G.newUnlocks = fresh;
+  }
+  G.paused = false;
+  music.stop();
+  fx.confetti();
+  sfx.fanfare();
+  if (res.isFinal) {
+    clearRun();
+    startCutscene(G, winScene(), () => { G.phase = "win"; }, "Win");
+  } else {
+    G.phase = "dayComplete";
+  }
 }
 
 const controller: GameController = {
   play: () => newRun(),
-  toManage: () => {
-    G.day += 1; // advance to the upcoming night's setup
-    toSetup();
-  },
-  startNextShift: () => beginNight(),
-  enterBuild: () => {
-    enterBuild(G);
-    G.phase = "build";
-    sfx.ui();
-  },
-  exitBuild: () => {
-    exitBuild(G);
-    G.phase = "manage";
-    sfx.ui();
-  },
+  continueRun: () => continueRun(),
+  hasSave: () => hasRun(),
   togglePause: () => {
     if (G.phase === "playing") G.paused = !G.paused;
   },
+  resume: () => { G.paused = false; },
+  restart: () => newRun(),
   quitToTitle: () => {
     G.paused = false;
+    // Snapshot a real in-progress run so "Continue" can resume it.
+    if (!G.tutorial && (G.phase === "playing" || G.phase === "dayComplete" || G.phase === "manage")) {
+      saveRun(G);
+    } else if (G.tutorial || G.phase === "setup") {
+      clearRun();
+    }
     G.phase = "title";
-    music.stop();
+    music.cue("menu");
   },
-  advanceCutscene: () => advanceCutscene(G),
+  config: () => G.config,
+  setConfig: (c: RestaurantConfig) => { applyConfig(G, c); },
+  setStudioFocus: (focus: "chef" | "room", cat?: string) => { G.studioFocus = focus; if (cat) G.studioCat = cat; },
+  finishSetup: () => finishSetup(),
+  nextFromDayComplete: () => {
+    prepareTreats(ctx);
+    G.phase = "manage";
+    sfx.ui();
+  },
+  chooseTreat: (id) => {
+    chooseTreat(G, id);
+    sfx.star();
+    G.treatChoices = []; // one upgrade per day — picker collapses to "chosen ✓"
+  },
+  finishManage: () => {
+    G.newUnlocks = [];
+    G.day += 1;
+    saveRun(G);
+    const story = storyForDay(G.day);
+    if (story) startCutscene(G, story, beginDay, `Day ${G.day}`);
+    else beginDay();
+  },
+  toggleTable: (i: number) => { toggleTableAt(G, i); },
+  swapStations: (a: StationId, b: StationId) => { swapStations(G, a, b); },
+  moveTable: (i: number, x: number, z: number) => { moveTable(G, i, x, z); },
+  moveStation: (id: StationId, x: number, z: number) => { moveStation(G, id, x, z); },
+  addTable: () => { addTable(G); },
+  removeTable: () => { removeTable(G); },
   skipCutscene: () => skipCutscene(G),
   toggleMute: () => {
     G.muted = !G.muted;
@@ -128,7 +210,8 @@ const controller: GameController = {
   },
 };
 
-const ui = new UI(uiRoot, controller, ctx);
+const ui = new UI(uiRoot, controller);
+music.cue("menu");
 
 // Unlock audio on first user gesture.
 let unlocked = false;
@@ -138,45 +221,36 @@ function unlockAudio(): void {
   sfx.unlock();
   music.unlock();
 }
-window.addEventListener("pointerdown", unlockAudio, { once: false });
-window.addEventListener("keydown", unlockAudio, { once: false });
+window.addEventListener("pointerdown", unlockAudio);
+window.addEventListener("keydown", unlockAudio);
 
-function endShift(): void {
-  const res = finishDay(ctx);
-  G.paused = false;
-  if (!res.passed) startCutscene(G, LOSE_STORY, () => { G.phase = "gameOver"; }, "Closed");
-  else if (res.isFinal) startCutscene(G, WIN_STORY, () => { G.phase = "win"; }, "Finale");
-  else G.phase = "dayEnd";
-}
-
-/** The deterministic logic step (shared by the rAF loop and tests). */
+// ── Deterministic logic step (shared by rAF + tests) ─────────────────────────
 function stepSim(dt: number): void {
   if (G.phase === "playing" && !G.paused) {
     updatePlaying(ctx, dt);
-    if (G.dayTime <= 0) endShift();
+    if (shiftOver(G)) endShift();
   }
 }
 
 function handleKeys(): void {
   if (G.phase === "cutscene") {
-    if (input.pressed("Space") || input.pressed("Enter") || input.clickedOn("game")) advanceCutscene(G);
-    if (input.pressed("Escape")) skipCutscene(G);
+    const cs = G.cutscene;
+    const wantSkip = input.pressed("Space") || input.pressed("Enter") || input.pressed("Escape") || input.clickedOn("game");
+    if (cs && cs.guard <= 0 && wantSkip) skipCutscene(G);
     return;
   }
-  if (input.pressed("KeyP") || (G.phase === "playing" && input.pressed("Escape"))) controller.togglePause();
-  if (G.phase === "playing" && !G.paused && (input.pressed("ShiftLeft") || input.pressed("ShiftRight"))) {
-    startDash(ctx);
-  }
-  if (G.phase === "build") {
-    if (input.pressed("KeyR")) rotateCursor(G);
-    if (input.pressed("KeyX")) sellHovered(ctx);
-    if (input.pressed("Escape")) controller.exitBuild();
-    if (input.clickedOn("game")) buildClick(ctx);
+  if (G.phase === "playing") {
+    if (input.pressed("KeyP") || input.pressed("Escape")) controller.togglePause();
+    if (!G.paused && (input.pressed("ShiftLeft") || input.pressed("ShiftRight"))) startDash(ctx);
   }
 }
 
+// ── Main loop ────────────────────────────────────────────────────────────────
 let last = performance.now();
-let lastDay = 0;
+let lastTODday = -1;
+let inCinePrev = false;
+let lastPaused = false;
+
 function frame(now: number): void {
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
@@ -185,116 +259,165 @@ function frame(now: number): void {
 
   handleKeys();
   stepSim(dt);
-  if (G.phase === "cutscene") tickCutscene(G, dt);
+  if (G.cutscene) tickCutscene(ctx, dt);
+
   if (G.dayCard) {
     G.dayCard.t += dt;
-    if (G.dayCard.t > 3.0) G.dayCard = null;
+    if (G.dayCard.t > 3) G.dayCard = null;
   }
 
-  // Time-of-day follows the run's day (afternoon → night).
-  if (G.day !== lastDay) {
-    lastDay = G.day;
-    stage.setTimeOfDay(TOTAL_DAYS > 1 ? (G.day - 1) / (TOTAL_DAYS - 1) : 0);
+  // Time-of-day mellows from morning → golden evening across the run. The
+  // cutscene layer sets its own warm tint, so refresh when we leave a cutscene.
+  const inCine = G.phase === "cutscene";
+  if (!inCine && (G.day !== lastTODday || inCinePrev)) {
+    lastTODday = G.day;
+    stage.setTimeOfDay(G.maxDay > 1 ? (G.day - 1) / (G.maxDay - 1) : 0);
   }
+  inCinePrev = inCine;
 
   fx.update(dt);
-  view.update(G, dt, input);
+  view.update(G, dt);
   stage.update(dt);
   stage.render(dt);
 
+  if (G.paused !== lastPaused) {
+    lastPaused = G.paused;
+    ui.showPause(G.paused);
+  }
   ui.frame(G);
 
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
 
-// ── Headless test surface ────────────────────────────────────────────────
+// ── Headless test surface ────────────────────────────────────────────────────
+function gotoStation(id: StationId): void {
+  const st = stationById(G, id);
+  if (!st) return;
+  G.chef.x = st.x;
+  G.chef.z = st.z + CHEF_REACH * 0.6;
+}
+
+function spawnGuest(order: FoodId, table = 0): number {
+  const tb = G.tables[table];
+  const uid = G.nextUid++;
+  if (tb) tb.occupied = uid;
+  G.customers.push({
+    uid, order, table,
+    x: tb?.seatX ?? 0, z: tb?.seatZ ?? 0, state: "seated",
+    patience: 30, maxPatience: 30, served: false, servedT: 0, mood: 1, hop: 0,
+    look: { body: 0, hair: 0, hat: false, hue: 0 },
+  });
+  return uid;
+}
+
+// Shared helpers used by both the test API and the debug scenario system.
+function doInteract(): string | null {
+  const a = actionFor(ctx);
+  if (a) { a.run(); G.prompt = { label: a.label, icon: a.icon }; }
+  return a ? a.label : null;
+}
+function doSkipStory(): void {
+  let guard = 0;
+  while (G.phase === "cutscene" && guard++ < 50) skipCutscene(G);
+}
+function doQuickStart(): void {
+  controller.play();
+  let g = 0;
+  while (g++ < 300) {
+    if (G.phase === "cutscene") { skipCutscene(G); continue; }
+    if (G.phase === "setup") { controller.finishSetup(); continue; }
+    if (G.phase === "playing" && G.tutorial) { endShift(); continue; }
+    if (G.phase === "playing") break;
+    if (G.phase === "dayComplete") { controller.nextFromDayComplete(); continue; }
+    if (G.phase === "manage") { controller.finishManage(); continue; }
+    break;
+  }
+  // The drive-through fires celebration FX (e.g. the tutorial-complete confetti)
+  // synchronously, which can't fade without render frames — drop them so a
+  // scenario "cut" starts from a clean slate.
+  ctx.fx.clear();
+}
+
+// The toolkit the debug scenarios drive the game through (see game/scenarios.ts).
+const scenarioApi: ScenarioApi = {
+  ctx,
+  play: () => controller.play(),
+  quickStart: doQuickStart,
+  toTitle: () => controller.quitToTitle(),
+  finishDay: () => endShift(),
+  nextDay: () => controller.nextFromDayComplete(),
+  finishManage: () => controller.finishManage(),
+  finishSetup: () => controller.finishSetup(),
+  skipCutscenes: doSkipStory,
+  setStudioFocus: (f) => controller.setStudioFocus(f),
+  config: () => G.config,
+  setConfig: (c) => controller.setConfig(c),
+  spawnGuest,
+  gotoStation,
+  gotoCustomer: (uid) => { const c = G.customers.find((x) => x.uid === uid); if (c) { G.chef.x = c.x; G.chef.z = c.z + 1.0; } },
+  interact: () => { doInteract(); },
+  tickN: (dt, n) => { for (let i = 0; i < n; i++) stepSim(dt); },
+};
+
 interface TestApi {
   G: typeof G;
   ctx: Ctx;
   ctrl: GameController;
   tick: (dt?: number) => void;
   tickN: (dt: number, n: number) => void;
+  scenario: (name: string) => string;
+  scenarios: () => readonly string[];
   interact: () => string | null;
   actionLabel: () => string | null;
-  buildClick: () => void;
-  place: (defId: string, col: number, row: number) => number;
-  remove: (col: number, row: number) => void;
-  itemAt: (col: number, row: number) => unknown;
-  recompute: () => void;
-  cellWorld: (col: number, row: number) => { x: number; z: number };
-  find: (defId: string) => { uid: number; col: number; row: number } | null;
-  buy: (defId: string) => boolean;
-  hire: () => boolean;
+  guide: () => typeof G.guide;
   dash: () => boolean;
-  sell: () => void;
-  rotate: () => void;
-  upgrade: (id: string) => boolean;
+  gotoStation: (id: StationId) => void;
+  gotoCustomer: (uid: number) => void;
+  spawnGuest: (order: FoodId, table?: number) => number;
+  recompute: () => void;
   stars: () => number;
+  finishDay: () => void;
+  nextDay: () => void;
+  chooseTreat: (id: string) => void;
+  finishManage: () => void;
+  finishSetup: () => void;
+  continueRun: () => void;
   skipStory: () => void;
   quickStart: () => void;
-  advanceCutscene: () => void;
   info: () => { calls: number; tris: number; geometries: number; textures: number; castShadow: boolean; pixelRatio: number; quality: string };
   drawCalls: () => number;
   setQuality: (q: "high" | "low") => void;
 }
+
 const api: TestApi = {
   G,
   ctx,
   ctrl: controller,
   tick: (dt = 1 / 60) => stepSim(dt),
-  tickN: (dt, n) => {
-    for (let i = 0; i < n; i++) stepSim(dt);
-  },
-  interact: () => {
-    const a = actionFor(ctx);
-    if (a) a.run();
-    return a ? a.label : null;
-  },
+  tickN: (dt, n) => { for (let i = 0; i < n; i++) stepSim(dt); },
+  scenario: (name) => runScenario(name, scenarioApi),
+  scenarios: () => SCENARIOS,
+  interact: doInteract,
   actionLabel: () => actionFor(ctx)?.label ?? null,
-  buildClick: () => buildClick(ctx),
-  place: (defId, col, row) => {
-    const it = makeItem(defId, col, row);
-    place(G.grid, it);
-    recomputeDerived(G);
-    return it.uid;
-  },
-  remove: (col, row) => {
-    removeAt(G.grid, col, row);
-    recomputeDerived(G);
-  },
-  itemAt: (col, row) => itemAt(G.grid, col, row),
-  recompute: () => recomputeDerived(G),
-  cellWorld: (col, row) => worldOfCell(G.grid, col, row),
-  find: (defId) => {
-    const it = items(G.grid).find((i) => i.defId === defId);
-    return it ? { uid: it.uid, col: it.col, row: it.row } : null;
-  },
-  buy: (defId) => buyItem(G, defId),
-  hire: () => hireHelper(G),
+  guide: () => G.guide,
   dash: () => startDash(ctx),
-  sell: () => sellHovered(ctx),
-  rotate: () => rotateCursor(G),
-  upgrade: (id) => applyUpgrade(G, id),
+  gotoStation,
+  gotoCustomer: (uid) => {
+    const c = G.customers.find((x) => x.uid === uid);
+    if (c) { G.chef.x = c.x; G.chef.z = c.z + 1.0; }
+  },
+  spawnGuest,
+  recompute: () => recomputeDerived(G),
   stars: () => computeStars(G),
-  skipStory: () => {
-    let guard = 0;
-    while (G.phase === "cutscene" && guard++ < 50) skipCutscene(G);
-  },
-  // Start a fresh run and fast-forward through intro + setup into actual play.
-  // Tests want the normal (non-tutorial) game, so clear the tutorial gate — the
-  // controlled tutorial freezes the clock/spawning and is covered separately.
-  quickStart: () => {
-    controller.play();
-    let g = 0;
-    while (G.phase !== "playing" && g++ < 30) {
-      if (G.phase === "cutscene") skipCutscene(G);
-      else if (G.phase === "manage") controller.startNextShift();
-      else break;
-    }
-    G.tutorial = -1;
-  },
-  advanceCutscene: () => advanceCutscene(G),
+  finishDay: () => endShift(),
+  nextDay: () => controller.nextFromDayComplete(),
+  chooseTreat: (id) => controller.chooseTreat(id as Parameters<GameController["chooseTreat"]>[0]),
+  finishManage: () => controller.finishManage(),
+  finishSetup: () => controller.finishSetup(),
+  continueRun: () => controller.continueRun(),
+  skipStory: doSkipStory,
+  quickStart: doQuickStart,
   info: () => ({
     calls: stage.renderer.info.render.calls,
     tris: stage.renderer.info.render.triangles,
@@ -304,7 +427,6 @@ const api: TestApi = {
     pixelRatio: stage.renderer.getPixelRatio(),
     quality: stage.quality,
   }),
-  // True scene draw-call count via a direct (non-composer) render.
   drawCalls: () => {
     stage.renderer.render(stage.scene, stage.camera);
     return stage.renderer.info.render.calls;

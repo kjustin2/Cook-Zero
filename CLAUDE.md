@@ -1,6 +1,10 @@
 # CLAUDE.md
 
-Guidance for Claude Code when working with the **Sizzle Rush 3D** codebase.
+Guidance for Claude Code when working with the **Sizzle Rush** codebase — a
+cute, **kid-simple 3D cooking game** (rebuilt from scratch in 2026-06 from an
+older, far more complex kitchen roguelite). Learn the architecture from the
+sibling games `Rogue-Hero-3` (look & feel), `Wall-of-Dead-3` and `Wall-of-Dead-2`
+(cinematic cutscene directors).
 
 ## How to Run
 
@@ -25,162 +29,192 @@ must be used (prefix intentionally-unused params with `_`).
 
 ## What the game is
 
-A real-time **3D** arcade kitchen roguelite (Three.js). The player controls a
-chef (WASD + Space) inside a restaurant: customers walk in and **seat themselves
-at dining tables** with orders, and the chef grabs ingredients from bins, cooks
-on grill/fryer/soda stations, assembles plates on prep counters, then **leaves
-the kitchen** (through a gap in the front counter) to **serve at the table**. Runs
-are **6 shifts** of 120s with a cash quota. Between shifts the player shops,
-picks an upgrade, sets pricing, and **rearranges/decorates the kitchen** on a
-tile grid where **placement & adjacency drive gameplay bonuses** — and also
-**arranges the dining tables** (add/move/remove) out on the dining floor.
+A bright, warm **3D cooking game so simple a young kid can play and have fun.**
+You are **Pip**, a tiny chef helping **Grandma's Diner**. Guests walk in, sit at
+a table, and show a big **picture order** (🍔🍟🥤🍦🌭) with a happy→sad face
+timer. The player roams with **WASD or Arrow keys** and does **everything with one
+button** (SPACE/ENTER): grab → cook → serve. Each food is **one clear path**:
+`grab at its source → (maybe) cook at its station → carry it to the guest`. There
+is **no plate assembly, no economy, no fail state** — the run is always winnable.
+
+**Design pillars (do not regress these):**
+- **One-button play.** `interact.ts actionFor()` returns the single best
+  `{label, icon, run}` for whatever the chef is next to + holding. The label/icon
+  drive the big on-screen SPACE button.
+- **The guest IS the order.** A floating emoji bubble + a generous green→red
+  patience bar. Serve by walking up and pressing the button. No ticket UI.
+- **The Wayfinder.** `wayfinder.ts computeGuide()` reads real state and points a
+  3D beacon + a DOM hint banner at the single most helpful next step, so a
+  pre-reader **can never get lost**. Guidance and the action prompt are derived
+  from the same state and can't contradict.
+- **No-fail / always-winnable.** A guest whose patience runs out just leaves a
+  little sad (no score penalty; the streak resets). Burning is so slow it almost
+  never happens, and the "helper" treat removes it entirely. Stars are 1–3, never 0.
+- **NO glow halos.** There is intentionally **no bloom post-pass, no point lights
+  on cooking food, and particles use `NormalBlending` (not Additive)** — so sparks/
+  steam never stack into a glowing "bulb of light" over the food or guests. Cooking
+  shows as a live colour tint (raw→golden→char). Render uses **`NeutralToneMapping`
+  + near-neutral lights** so a colour the player picks renders true (white = white).
+  Don't reintroduce bloom, additive particles, ACES, or emissive halos.
+- **Make-it-yours customization.** A `RestaurantConfig` (`config` on `G`) holds the
+  name, chosen menu, chef + pet looks, the full colour palette (walls/floor/tiles/
+  stripe/windows, table top/rim/legs/chairs, equipment body/trim, flower type +
+  bloom), table count and decor level. Defaults (`customize.ts`) reproduce the
+  original look exactly. Editing config live re-skins the 3D diner (SceneView diffs
+  config each frame). The customizer (`ui.ts`) is a **friendly icon category bar**
+  (Food/Chef/Pet/Diner/Tables/Gear/Flowers) showing **one focused section at a
+  time** — never a wall of swatches. The setup/manage live preview frames what
+  you're editing via `G.studioFocus` (`chef` close-up for Chef/Pet, pulled-back
+  `room` view for Diner/Tables/Gear/Flowers so wall/floor colours are seen
+  changing); `G.studioCat` is the open category, so a debug scenario can cut
+  straight to e.g. the Diner section with a room-framed preview.
+- **Juice everywhere.** Live cooking-mesh tint, squash-stretch pops, confetti/
+  hearts/coins on a serve, a purely-celebratory combo, bouncy adaptive music.
+- **Cinematic cutscenes.** A data-driven director dollies the real camera through
+  the diner with letterbox, a title card, and big emoji-portrait dialogue.
 
 **Phase machine (`src/main.ts`):**
 ```
-title → cutscene(intro) → manage[setup] ⇄ build → [cutscene(night)] → playing →
-        dayEnd → manage[next night] ⇄ build → … →
-        cutscene(ending) → win | cutscene(closed) → gameOver
+title → cutscene(intro) → playing(tutorial) → cutscene("Tutorial Complete!") →
+        setup → playing → dayComplete → manage → [cutscene(dayN story)] →
+        playing → … → cutscene(win) → win
 ```
-You get the **manage hub (shop/pricing/upgrades + Decorate & Build) before EVERY
-night, including night 1** (`toSetup`); "Open Night N" → `beginNight` plays that
-night's cutscene then `startDay`. `controller.toManage` increments `G.day` so the
-hub preps the *upcoming* night. A first-run **tutorial** (`game/tutorial.ts`,
-gated by `meta.tutorialDone`) guides the first burger. **Escape** opens a pause
-menu (Resume/Restart/settings/Quit). Placed decor is **solid** (collision); bins
-show a floating icon. Tests reach play via `__SR.quickStart()`.
-A light diner-rescue story plays in cutscenes (`game/story.ts` data, `game/cutscene.ts`
-controller): an intro on New Game, beats before nights 3 & 5, and a win/lose ending. A
-"Night N — theme" title card (`G.dayCard`) opens each shift. The menu shows a career
-**rank** derived from `meta.bestDay` (`careerRank`).
+First-ever Play → `startTutorial` (slow intro + a guided burger-only shift, no clock,
+super-patient guests) → `finishTutorial` plays a clear "Tutorial Complete!" beat →
+`setup` (the build-your-diner studio: name, menu, looks, colours, layout) →
+`finishSetup` → `beginDay` (real day 1). Returning players (meta `tutorialDone`)
+skip straight to `setup`. Finishing a day → `dayComplete` (stars) →
+`nextFromDayComplete` rolls 3 upgrades → `manage` (Upgrade / Decorate / Arrange
+tabs) → `finishManage` (`G.day++`) → story cutscene (days 3 & 5) → play. **Esc/P**
+pauses; the pause menu's **Quit** snapshots the run so the title shows **Continue**.
+Tests reach real play via `__SR.quickStart()` (drives through tutorial + setup).
 
 ## Architecture
 
 Strict-TS ESM, Vite-bundled, Electron-wrapped. Plain-function game systems share
 one central `G` (`GameState`) created in `state.ts`. Render + audio are reached
 only through the `Fx`/`Sfx`/`Music` interfaces on the `Ctx` hub, so game logic
-never imports Three.js and runs headless in tests.
+never imports Three.js and runs headless in tests (`NULL_FX/NULL_SFX/NULL_MUSIC`).
 
 | Area | Files | Role |
 |---|---|---|
-| Core | `core/{math,rng,input,save}.ts` | helpers, seeded RNG, input, localStorage best-stats |
-| State | `game/{types,balance,state,ctx}.ts` | type model, tunables, `G` factory + starting layout, system hub |
-| Data | `game/catalog.ts` | `RECIPES`, `CATALOG` (stations + decor with adjacency/global bonuses), cook rules |
-| Grid | `game/grid.ts` | tile model, cell↔world coords, front-of-house weighting |
-| Adjacency | `game/adjacency.ts` | recomputes per-station cook bonuses + global `derived` knobs |
-| Sim | `game/{cooking,interact,chef,customers,serving,helper,sim,dining}.ts` | the playing-state systems (chef.ts also holds `startDash`; `dining.ts` = table-service geometry: a **dining row** the player arranges tables across (`DINING_COLS`, `tableWorld`/`diningColOf`/`inDiningZone`, `seatOf`), the counter gap, `barriersFor(tables)` collision (counter segments + each placed table), `ENTRANCE`/`EXIT`, `SERVE_REACH`) |
-| Meta | `game/{upgrades,shop,placement,flow,modifiers,story,cutscene}.ts` | upgrades, shop, build mode, day transitions, modifiers, story content, cutscene controller |
-| Render | `render/{stage,sceneView,kit,fx}.ts` + `render/{food,stations,decor,actors}.ts` | Three.js renderer/post (IBL env map + time-of-day), scene sync, FX, procedural meshes |
-| Audio | `audio/{sfx,music}.ts` | procedural WebAudio SFX + music (intensity follows combo) |
-| UI | `ui/ui.ts`, `style.css` | DOM HUD + every overlay screen + full-screen FX layers |
+| Core | `core/{math,rng,input,save}.ts` | helpers, seeded RNG, keyboard input (WASD+arrows); `save.ts` = localStorage meta (best/settings/**unlocks**/**tutorialDone**/last **config**) + a versioned resumable **run snapshot** (`saveRun`/`loadRun`/`clearRun`) |
+| State | `game/{types,balance,catalog,customize,ctx,state}.ts` | pure type model, tunables, food/station data, **`customize.ts` (RestaurantConfig defaults + colour swatches + choosable pets/foods + the unlock table)**, system hub, `G` factory + `recomputeDerived` + `applyConfig`/`addTable`/`toggleTableAt`/`swapStations` |
+| Sim | `game/{chef,stations,customers,interact,wayfinder,serving,pet,garden,sim}.ts` | the playing-state systems: chef movement+one-button interact, cook-slot timers, guest lifecycle (spawns from the **chosen menu**), `actionFor()`, the wayfinder, serve payout (×`derived.coinMult` from decor)/combo/juice, the pet (pet/feed), the garden, `updatePlaying`+`shiftOver` |
+| Flow | `game/{flow,upgrades,cutscene,story}.ts` | day start (+ tutorial branch + per-day checkpoint), stars, **upgrade roll (incl. `table`/`decor`)**, the cutscene director, the warm story (incl. `tutorialDoneScene`) |
+| Render | `render/{stage,sceneView,kit,fx,diner,stations,food,actors,figures,pets,plants}.ts` | Three.js renderer/post (**no bloom**) + cinematic camera, one-way `G`→Three diff that **rebuilds room/tables/stations/chef/pet when `config` changes**, procedural meshes recoloured from config (incl. 3 pet kinds: corgi/cat/bunny, 4 flower types), pooled particles, cutscene cast |
+| Audio | `audio/{sfx,music}.ts` | procedural WebAudio SFX + adaptive step-sequencer music |
+| UI | `ui/ui.ts`, `style.css` | DOM HUD + every overlay + the cutscene presentation + full-screen FX layers |
 
-**Look & feel:** DOM/CSS over the live 3D canvas, modeled on Rogue-Hero-3's system.
-Two self-hosted fonts (`@fontsource`): **Baloo 2** (`--font-display`, all titles/
-headings/values) + **Nunito** (`--font-ui`, body/buttons). One warm token set + a
-single accent; glows via `color-mix`. One container recipe (glass + hairline +
-accent top-border + soft lift); every overlay fades in (`screen-fade`/`rise-in`),
-cards deal in staggered. UI adds full-screen feedback layers (`.fx-vignette`,
-`.fx-lowtime` red pulse, `.fx-fire` combo glow, `.fx-flash` serve flash) and a
-combo HUD bump — re-triggered via the `void el.offsetWidth` reflow trick.
+**Render is a separate, one-way world.** `Stage` owns the renderer/camera/lights/
+post and a `setCinematic`/`setCinePose` mode the cutscene uses. `SceneView.update`
+diffs `G` against Three objects every frame via uid/key-keyed Maps (customers,
+slot food, carried item), building/disposing as state changes; it also drives the
+wayfinder beacon and, during a cutscene, the figure cast + camera. Render never
+mutates gameplay.
 
 ## Key conventions
 
-- **The floor plan is the kitchen.** Stations + decor occupy a `GRID_COLS×GRID_ROWS`
-  grid (`balance.ts`); the chef roams continuously and collides with solid cells.
-  Row 0 is nearest the counter (front of house); decor up front is worth more vibe.
-  The chef also collides with the dining colliders (`barriersFor(G.tables)` = the
-  two counter segments + every placed table) and may cross the central counter gap
-  onto the dining floor to serve; bounds run from `DINING_MIN_Z` (front) to the
-  back of the kitchen.
-- **Tables are arrangeable.** Dining tables live in `G.tables` (a `TableInst`
-  list of dining-row columns), seeded from `DEFAULT_TABLE_COLS`. In build mode,
-  hovering the dining floor (`inDiningZone`) snaps the cursor to a table column;
-  clicking adds / picks-up-to-move / drops a table and **X** removes one. Seating
-  (`customers.ts`), collision (`chef.ts`) and rendering (`sceneView.syncTables`)
-  all derive from `G.tables`, so the dining layout is fully data-driven.
-- **Adjacency is the heart of decoration.** `recomputeDerived()` must be called
-  after any layout/pricing/reputation change. It sets each cook station's
-  `effCookSpeed`/`effSlots` from neighbouring decor and fills `G.derived`
-  (patience, tip, comboWindow, moveSpeed, perfectWindow, repGainMult, vibe,
-  spawnMult). The build-mode "Kitchen Effects" panel reads `G.derived` live.
-- **Carry model** (`G.carry`): `{kind:'ing',id}` · `{kind:'part',id,quality}` ·
-  `{kind:'plate',parts[]}` · `{kind:'burnt'}` · `null`. Plate↔recipe matching is a
-  sorted-multiset compare (`partsKey`).
-- **Cook timing** per slot, baked at placement using the station's adjacency
-  speed: cooking `[0,cookT)` → perfect `[cookT,perfT)` → overdone `[perfT,burnT)`
-  → burnt (grills only; fryers/soda never burn).
-- **Cooking feel:** food on a grill/fryer slot is a single persistent "cooking"
-  mesh (`buildCookingPatty`/`buildCookingFries`) that the renderer **tints every
-  frame** from the slot timer — the patty browns continuously raw-pink → seared →
-  overdone (then swaps to the charred `burnt` mesh), fries pale → golden — with a
-  subtle gloss at the perfect window (`slotMeshSpec` + `tintCooking*` in
-  `sceneView`). Patties still somersault-**flip**, fries **shimmy**, and every
-  item/plate part **pops** (squash-stretch) when placed. The grill models a
-  recessed ember firebox + cast-iron grate + backsplash; its warm point light
-  sits high so it never over-lights the embers into a bloom flare. The chef plays
-  a chop/flip arm-pump driven by a `chef.cookT` pulse set in `interact.ts`.
-- **Interactions** live in `interact.ts` `actionFor()` — returns `{label,run}` for
-  the nearest interactable; the label is the SPACE hint. Serving is **proximity
-  table service**: the chef must walk up to a seated guest within `SERVE_REACH`
-  (`dining.ts`); an out-of-reach plate offers no serve.
-- **Business layer:** `priceLevel` (PRICE_LEVELS) trades coins for patience/crowd;
-  `rep` (0–100) scales `spawnMult`; the hired `helper` tends grills so they don't
-  burn (and holds the perfect sear at higher levels), wage paid at day end.
-- **Variety & feel:** customers have a `kind` (normal/vip/critic) with baked
-  `payMult`/`repMult` (`CUSTOMER_KINDS`); each day rolls one `G.modifier`
-  (`modifiers.ts`) read by `adjacency`/`serving`/`customers`; the chef can `dash`
-  (Shift); `finishDay` scores the shift `0–3` stars via `computeStars`. Per-day
-  tallies live in `G.dayStats` (reset in `startDay`), distinct from cumulative
-  `G.stats`.
-- **`window.__G` / `window.__SR`** are exposed in `main.ts` for headless tests.
-  `__SR.tick(dt)` runs one deterministic logic step (no rAF); `__SR.interact()`,
-  `__SR.place()`, `__SR.buy()` etc. drive systems directly.
+- **Fixed, data-driven world (no grid/build mode).** Stations live in
+  `state.ts STATION_SPOTS` along the back wall; six tables in `TABLE_SPOTS`. The
+  chef roams the whole floor with soft circle collision (`chef.ts`); bounds are
+  `FLOOR` in `balance.ts`.
+- **Foods (`catalog.ts FOODS`).** Each `FoodDef` has a `source` station, an
+  optional `cook` station (null = instant like drink/icecream), a `minDay`, and
+  cute names/colours. `menuForDay(day)` gates the unlocked menu.
+- **Carry model** (`chef.carry`): `null` · `{kind:'raw',food}` · `{kind:'ready',
+  food,quality}` · `{kind:'burnt'}`. Hands are full or empty — nothing to manage.
+- **Cook timing** (`stations.ts`, windows from `balance.ts COOK`): raw →
+  good(ready) → **PERFECT** (wide, easy) → crispy (long grace) → burnt (grills
+  only, very rare; `helper` treat freezes at perfect). Quality is read from the
+  slot timer; the cooking mesh **browns continuously every frame**
+  (`food.ts tintCooking`).
+- **Treats** (`upgrades.ts`): between-day pick-one upgrades shown by big icon. Most
+  repeatable stat boosts (`fast/reach/time/quickcook/patient/extracustomer`); two
+  one-time powers (`sparkle/helper`). `recomputeDerived()` in `state.ts` folds the
+  chosen treats into `G.derived` (moveSpeed, reach, level time, cook speed,
+  patience, sparkle, helper). **Picking a treat visibly redecorates the diner**
+  (`sceneView.syncDecor`): balloons (extracustomer), wall clock (time), rug (fast),
+  grill flames (quickcook), a helper chef (helper) — so the customization is SEEN.
+- **Pet + garden = the cute "designing your restaurant" layer.** `pet.ts` — a
+  corgi (`G.pet`) wanders the dining floor; the chef can **pet** it (joy + a little
+  patience back for waiting guests) or **feed** it a finished dish (consumes it,
+  keeps your streak) — both optional "cool decisions" the wayfinder never forces.
+  `garden.ts` — flower planters (`G.plants`) **grow a stage each day** (`growGarden`
+  at `startDay`) and can be watered in-shift (`waterPlant`); each bloomed flower
+  adds patience (folded into `recomputeDerived`). Rendered by `pets.ts`/`plants.ts`.
+- **Clarity:** every station has a **floating sign** (`sceneView.signSprite`) — cook
+  stations show 🔥, sources/instants show the food they make — so a kid instantly
+  knows what each does and which order it matches. Order bubbles are big and
+  colour-coded to the food, and pulse when patience is low.
+- **Cutscenes** (`cutscene.ts` logic + `story.ts` data + `sceneView` camera/cast +
+  `ui.ts` letterbox/dialogue). A `CineScene` is timed `Shot`s (camera `from/to`
+  pose, fov, optional `line`/`title`/`fade`/`sfx`) plus a `cast` of `CastPlacement`s.
+  The logic core only handles timing + per-shot sfx + `onDone` chaining; the camera
+  dolly, DoF-free cinematic mode, figure cast and DOM letterbox/dialogue read
+  `G.cutscene`. Skippable with a short input guard.
+- **`window.__G` / `window.__SR`** are exposed in `main.ts` for headless tests:
+  `tick(dt)` runs one deterministic `stepSim`; `interact()`, `gotoStation(id)`,
+  `gotoCustomer(uid)`, `spawnGuest(order,table)`, `quickStart()`, `skipStory()`,
+  `finishDay()`, `nextDay()`, `chooseTreat(id)`, `stars()`, `guide()`,
+  `info()`/`drawCalls()`/`setQuality()`.
+- **Debug scenario system** (`game/scenarios.ts`, exposed as `__SR.scenario(name)`
+  + `__SR.scenarios()`). A scenario is a deterministic "cut" that drives the game
+  straight into a named situation for tests + screenshots — `title`, `play`,
+  `cooking`, `carry`, `burning`, `wayfinder`, `serve-perfect`, `white-diner`,
+  `setup`/`setup-chef`/`setup-room`, `manage`, `day-complete`, `win`. Each cut
+  ends `quickStart`/`toSetup` with `ctx.fx.clear()` and starts with `ctx.fx.clear()` (new on the
+  `Fx` interface) so no stale particles linger. `scripts/loop/capture.mjs` and
+  `smoke-scenarios.mjs` drive screenshots/assertions off these instead of
+  hand-staging each moment.
 
 ## Balance knobs (`game/balance.ts`)
 
-`TOTAL_DAYS`, `SHIFT_LEN`, `QUOTAS`, grill/fryer timing, combo window/cap,
-`ON_FIRE_AT`, reputation deltas, `SPAWN_BASE`, `PRICE_LEVELS`, helper wages,
-`GRID_COLS/ROWS`, `DASH_TIME/CD/MULT`, `CUSTOMER_KINDS`. Modifier list:
-`game/modifiers.ts`.
+`MAX_DAY`, `DAY_LEN`, `DAY_GOAL`, `DAY_GUESTS`, `SPAWN_GAP`, `PATIENCE`, the `COOK`
+window durations, `CHEF_SPEED/REACH`, `DASH_*`, `COMBO_WINDOW`, `FIRE_AT`,
+`COIN_*`, `FLOOR`. Everything is tuned **generous** — wide perfect window, patient
+guests, near-impossible burning — so a kid wins and has fun.
 
 ## Performance
 
-- **Quality setting** (`stage.applyQuality`, persisted as `meta.quality`, toggled on
-  the menu): `high` = 1024 PCF shadows + mipmap bloom + SMAA + dpr≤2; `low` = no
-  shadows, cheap bloom, no SMAA, dpr 1. Big win on weak GPUs.
-- Shadow map is 1024 over a frustum tightened to the play area (¼ the fill of the
-  old 2048/±20). IBL is a one-time PMREM; `environmentIntensity` kept low.
-- Hot paths avoid per-frame allocation: `sceneView.update` computes `items()` once
-  and reuses a scratch `Vector3` for slot-food placement; the build-mode "Kitchen
-  Effects" panel only rebuilds its DOM when a value changes. Removed meshes are
-  disposed (geometry-only for shared-material actor rigs) — `smoke-perf` proves
-  there's no geometry leak across heavy customer churn.
-- `smoke-perf` guards a scene draw-call budget, bounded geometry/texture counts, a
-  sub-0.5ms sim step, the quality toggle, and an fps floor. Test hooks: `__SR.info()`,
-  `__SR.drawCalls()` (direct non-composer render), `__SR.setQuality()`.
+- **Quality toggle** (`stage.applyQuality`, persisted as `meta.quality`): `high` =
+  1024 PCF soft shadows + SMAA + dpr≤2; `low` = no shadows, no SMAA, dpr 1. Both
+  share the same post chain — a `RenderPass` + a vignette `EffectPass`. There is
+  **no bloom pass** (`stage.buildPost`), in line with the no-glow pillar.
+- Hot paths avoid per-frame allocation: pooled particles/coins/hearts/floaters in
+  one capped buffer; uid/key-keyed view maps build once and dispose on removal;
+  the beacon icon texture is cached by string. `smoke-perf` guards a draw-call
+  budget (`< 700`), bounded geometry (`< 3000`) and texture (`< 400`) counts, a
+  sub-1ms sim step, and that the quality toggle drives `keyLight.castShadow`.
 
 ## Testing notes
 
 - Smoke tests (`scripts/smoke-*.mjs`) use the shared `_harness.mjs` (auto-finds
   cached Chromium via `_chrome.mjs`). `npm test` (`run-smokes.mjs`) boots one dev
-  server and runs all 15 suites against it. Cutscenes interrupt `play()` now, so
-  logic tests call `__SR.skipStory()` after `play()` to reach `playing`; real-DOM
-  tests click the cutscene **Skip** button. Two complementary styles, both
-  Playwright headless:
-  - **Logic probes** (`boot/story/adjacency/economy/cook/tables/events/systems/
-    balance/features/perf/flow`) drive `window.__SR` directly (`tick`, `interact`,
-    `place`, `buy`, `sell`, `upgrade`, `stars`, …) for deterministic assertions on
-    cooking, scoring, adjacency, burns, build, upgrades, pricing payout, recipe
-    gating, plate matching, star tiers, and **table service** (walk-in → seat →
-    proximity serve, incl. the out-of-reach negative).
-  - **RH3-style real play** (`input/playthrough/soak`) drive the REAL game through
-    real keyboard/mouse + DOM clicks: `playthrough` navigates the whole run to the
-    win + game-over screens, `input` exercises WASD/Shift/Space/P + mouse build
-    placement, `soak` runs ~12s of real-time rAF watching for runtime errors.
+  server and runs all suites. Two styles, both Playwright headless:
+  - **Logic probes** (`boot/cook/instant/wayfinder/customers/balance/pet-garden/
+    setup/save/flow/story/perf`) drive `window.__SR` directly for deterministic
+    assertions on the full grab→cook→serve loop, instant foods, the wayfinder's
+    next-step targeting (incl. the no-blackout regression), guest arrival/patience/
+    leave, the balance invariants (reachable goals + guest overlap), the pet
+    (pet/feed/cheer) and garden (grow/bloom/water), the **setup studio** (tutorial→
+    setup, naming/menu/colours/table-count/pet-kinds apply, unlock gating), **save/
+    resume** (quit → Continue restores a run from storage), stars/upgrades/day
+    progression to the win, the intro cinematic, and the perf budget. `__SR` now
+    also exposes `finishSetup`/`finishManage`/`continueRun`; advancing a day in a
+    probe is `finishDay → nextDay → (chooseTreat) → finishManage`.
+  - **Real play** (`playthrough/soak`) drive the REAL game via real DOM clicks +
+    keyboard: click Play, skip the cutscene, walk + press the action button; soak
+    mashes random keys for ~8s watching for runtime errors.
   All suites fail on any `console.error`/pageerror (benign AudioContext + the
   headless `glBlitFramebuffer` warnings are filtered).
+- **`npm run shots`** (`scripts/shots-flow.mjs`) boots a server and walks the WHOLE
+  journey (title → intro → tutorial → serve "PERFECT" → setup character preview →
+  recolour/custom diner → cook → day-complete → manage tabs → win), saving a fresh
+  numbered storyboard to `shots/flow/`. This is the eyes of the improve-look-improve
+  loop: regenerate, open the images, judge clarity/glows/clipping, fix, repeat. It
+  also fails loudly on console errors. `scripts/shot.mjs` is a smaller title/cook/
+  manage snapshot.
 - Gotcha: a **stale Vite squatting port 5179** serves a broken page and makes
   every smoke time out waiting for `window.__SR`. Kill stray `vite`/`esbuild`
-  processes first if tests mysteriously fail to find the test surface.
-- Headless WebGL (SwiftShader) spams a harmless `glBlitFramebuffer` depth-stencil
-  warning from postprocessing; it does not affect rendering and the harness
-  ignores warnings (only `console.error`/pageerror fail a run).
+  processes first if tests mysteriously fail.

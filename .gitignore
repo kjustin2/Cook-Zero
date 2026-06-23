@@ -18,3 +18,14 @@ Thumbs.db
 
 # Headless smoke-test screenshots
 shots/
+
+# Improvement-loop run artifacts (per-cycle screenshots/reports + resumable state).
+# Tracked: loop/goals.mjs, loop/README.md, loop/PROGRESS.md (the log).
+loop/cycles/
+loop/state.json
+loop/*.png
+loop/menus*/
+loop/scenarios/
+loop/diag*/
+loop/review/
+loop/check/

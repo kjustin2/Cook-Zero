@@ -1,7 +1,7 @@
 {
   "name": "sizzle-rush-3d",
-  "version": "1.0.0",
-  "description": "Sizzle Rush — a 3D arcade kitchen roguelite. Cook, plate, serve, combo, then rearrange and decorate your kitchen to chase bigger tips.",
+  "version": "2.0.0",
+  "description": "Sizzle Rush — a cute, kid-simple 3D cooking game. Help Pip cook, serve and make everyone happy at Grandma's Diner. One-button play, a sparkly wayfinder, and warm cinematic cutscenes.",
   "type": "module",
   "main": "electron-main.cjs",
   "scripts": {
@@ -12,7 +12,12 @@
     "electron": "electron .",
     "standalone": "npm run build && electron .",
     "start": "npm run standalone",
-    "test": "node scripts/run-smokes.mjs"
+    "test": "node scripts/run-smokes.mjs",
+    "shots": "node scripts/shots-flow.mjs",
+    "loop": "node scripts/loop/loop.mjs",
+    "loop:capture": "node scripts/loop/capture.mjs",
+    "loop:verify": "node scripts/loop/verify-logic.mjs",
+    "loop:observe": "node scripts/loop/observe.mjs"
   },
   "dependencies": {
     "@fontsource/baloo-2": "^5.0.0",
@@ -21,6 +26,7 @@
     "three": "^0.170.0"
   },
   "devDependencies": {
+    "@anthropic-ai/sdk": "^0.70.0",
     "@types/three": "^0.170.0",
     "electron": "^34.0.0",
     "playwright-core": "^1.49.0",

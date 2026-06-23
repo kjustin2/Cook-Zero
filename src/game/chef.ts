@@ -1,146 +1,91 @@
-// Chef movement (continuous, collides with solid station cells) and the
-// interact trigger. The chef roams the kitchen on the +Z side of the counter.
+// The chef (Pip): WASD/arrow movement, soft collision with stations + tables, a
+// little "zoom!" dash (Shift), facing, and the single-button interact. Movement
+// is generous and never sticky — a kid should glide around, not get wedged.
 
 import type { Ctx } from "./ctx";
-import type { Chef } from "./types";
 import { actionFor } from "./interact";
-import { cellOfWorld, isSolidAt, worldOfCell, TILE } from "./grid";
-import { barriersFor, DINING_MIN_Z, type AABB } from "./dining";
-import { DASH_CD, DASH_MULT, DASH_TIME } from "./balance";
+import { DASH_CD, DASH_MULT, DASH_TIME, FIRE_AT, FLOOR } from "./balance";
 import { clamp, damp } from "../core/math";
 
-const MOVE_SPEED = 6.6;
-const CHEF_R = 0.42;
-const CELL_HALF = TILE * 0.38; // solid footprint half-extent (gaps to walk)
+const CHEF_R = 0.5;
+const STATION_R = 1.05;
+const TABLE_R = 0.95;
+const COOK_PULSE = 0.42;
 
-/** Resolve the chef circle out of the dining colliders (counter + tables). */
-function resolveBarriersAxis(chef: Chef, barriers: AABB[], axis: "x" | "z"): void {
-  for (const b of barriers) {
-    const minX = b.minX - CHEF_R;
-    const maxX = b.maxX + CHEF_R;
-    const minZ = b.minZ - CHEF_R;
-    const maxZ = b.maxZ + CHEF_R;
-    if (chef.x <= minX || chef.x >= maxX || chef.z <= minZ || chef.z >= maxZ) continue;
-    if (axis === "x") {
-      chef.x = chef.x - minX < maxX - chef.x ? minX : maxX;
-      chef.vx = 0;
-    } else {
-      chef.z = chef.z - minZ < maxZ - chef.z ? minZ : maxZ;
-      chef.vz = 0;
-    }
-  }
-}
-
-function resolveAxis(ctx: Ctx, axis: "x" | "z"): void {
-  const { G } = ctx;
-  const chef = G.chef;
-  const { col, row } = cellOfWorld(G.grid, chef.x, chef.z);
-  for (let dr = -1; dr <= 1; dr++) {
-    for (let dc = -1; dc <= 1; dc++) {
-      const c = col + dc;
-      const r = row + dr;
-      if (!isSolidAt(G.grid, c, r)) continue;
-      const { x: cx, z: cz } = worldOfCell(G.grid, c, r);
-      const minX = cx - CELL_HALF - CHEF_R;
-      const maxX = cx + CELL_HALF + CHEF_R;
-      const minZ = cz - CELL_HALF - CHEF_R;
-      const maxZ = cz + CELL_HALF + CHEF_R;
-      if (chef.x <= minX || chef.x >= maxX || chef.z <= minZ || chef.z >= maxZ) continue;
-      // Overlapping this cell's expanded box — push out along the active axis.
-      if (axis === "x") {
-        const pushL = chef.x - minX;
-        const pushR = maxX - chef.x;
-        if (pushL < pushR) chef.x = minX;
-        else chef.x = maxX;
-        chef.vx = 0;
-      } else {
-        const pushU = chef.z - minZ;
-        const pushD = maxZ - chef.z;
-        if (pushU < pushD) chef.z = minZ;
-        else chef.z = maxZ;
-        chef.vz = 0;
-      }
-    }
-  }
-}
-
-/** Begin a dash in the current heading (or facing) if off cooldown. */
 export function startDash(ctx: Ctx): boolean {
-  const { G, input } = ctx;
-  const chef = G.chef;
-  if (chef.dashT > 0 || chef.dashCD > 0) return false;
-  const mv = input.moveVector();
-  const len = Math.hypot(mv.x, mv.z);
-  if (len > 0) {
-    chef.dashX = mv.x / len;
-    chef.dashZ = mv.z / len;
-  } else {
-    chef.dashX = Math.sin(chef.face);
-    chef.dashZ = -Math.cos(chef.face);
-  }
-  chef.dashT = DASH_TIME;
-  chef.dashCD = DASH_CD;
-  chef.face = Math.atan2(chef.dashX, -chef.dashZ);
+  const c = ctx.G.chef;
+  if (c.dashCd > 0 || c.dashT > 0) return false;
+  c.dashT = DASH_TIME;
+  c.dashCd = DASH_CD;
   ctx.sfx.dash();
-  ctx.fx.trail(chef.x, chef.z);
+  ctx.fx.trail(c.x, c.z);
   return true;
 }
 
 export function updateChef(ctx: Ctx, dt: number): void {
   const { G, input } = ctx;
-  const chef = G.chef;
-  if (chef.dashCD > 0) chef.dashCD -= dt;
+  const c = G.chef;
+
+  if (c.dashCd > 0) c.dashCd = Math.max(0, c.dashCd - dt);
+  if (c.dashT > 0) c.dashT = Math.max(0, c.dashT - dt);
+  if (c.cookT > 0) c.cookT = Math.max(0, c.cookT - dt);
+  if (c.cheer > 0) c.cheer = Math.max(0, c.cheer - dt);
 
   const mv = input.moveVector();
-  const len = Math.hypot(mv.x, mv.z);
-  const nx = len > 0 ? mv.x / len : 0;
-  const nz = len > 0 ? mv.z / len : 0;
-  const speed = MOVE_SPEED * G.derived.moveSpeed;
+  let dx = mv.x;
+  let dz = mv.z;
+  const len = Math.hypot(dx, dz);
+  let speed = G.derived.moveSpeed;
+  if (c.dashT > 0) speed *= DASH_MULT;
 
-  if (chef.dashT > 0) {
-    chef.dashT -= dt;
-    const ds = speed * DASH_MULT;
-    chef.vx = chef.dashX * ds;
-    chef.vz = chef.dashZ * ds;
-    if (ctx.rng.chance(dt * 18)) ctx.fx.trail(chef.x, chef.z);
+  if (len > 0.01) {
+    dx /= len;
+    dz /= len;
+    c.vx = damp(c.vx, dx * speed, 18, dt);
+    c.vz = damp(c.vz, dz * speed, 18, dt);
+    c.facing = Math.atan2(dx, dz);
+    if (c.dashT > 0 && ctx.rng.chance(dt * 30)) ctx.fx.trail(c.x, c.z);
   } else {
-    chef.vx = damp(chef.vx, nx * speed, 18, dt);
-    chef.vz = damp(chef.vz, nz * speed, 18, dt);
+    c.vx = damp(c.vx, 0, 18, dt);
+    c.vz = damp(c.vz, 0, 18, dt);
   }
 
-  const barriers = barriersFor(G.tables);
-  chef.x += chef.vx * dt;
-  resolveAxis(ctx, "x");
-  resolveBarriersAxis(chef, barriers, "x");
-  chef.z += chef.vz * dt;
-  resolveAxis(ctx, "z");
-  resolveBarriersAxis(chef, barriers, "z");
+  c.x += c.vx * dt;
+  c.z += c.vz * dt;
 
-  // Play-area bounds — the chef may now roam the dining floor (front of counter).
-  const halfW = (G.grid.cols / 2) * TILE + 0.6;
-  const backZ = worldOfCell(G.grid, 0, G.grid.rows - 1).z + TILE * 0.7;
-  chef.x = clamp(chef.x, -halfW, halfW);
-  chef.z = clamp(chef.z, DINING_MIN_Z, backZ);
+  // Soft circle push-out from solid stations + tables.
+  for (const st of G.stations) pushOut(c, st.x, st.z, CHEF_R + STATION_R);
+  for (const tb of G.tables) pushOut(c, tb.x, tb.z, CHEF_R + TABLE_R);
 
-  const moving = len > 0.01 || chef.dashT > 0;
-  if (len > 0.01) chef.face = Math.atan2(nx, -nz); // face the heading
-  if (moving) {
-    chef.walk += dt * (6 + Math.hypot(chef.vx, chef.vz) * 0.7);
-  } else {
-    chef.walk = damp(chef.walk, 0, 6, dt);
-  }
+  c.x = clamp(c.x, FLOOR.minX, FLOOR.maxX);
+  c.z = clamp(c.z, FLOOR.minZ, FLOOR.maxZ);
 
-  // On-fire glow follows combo.
-  const fireTarget = G.combo >= 5 ? clamp((G.combo - 4) / 4, 0.3, 1) : 0;
-  chef.fire = damp(chef.fire, fireTarget, 4, dt);
+  // On-a-roll glow follows the combo.
+  const fireTarget = G.combo >= FIRE_AT ? clamp((G.combo - FIRE_AT + 1) / 4, 0.3, 1) : 0;
+  G.fire = damp(G.fire, fireTarget, 4, dt);
 
-  // Interact.
-  if (chef.interactCD > 0) chef.interactCD -= dt;
-  if (chef.cookT > 0) chef.cookT -= dt;
+  // One-button interact: compute the best nearby action; press SPACE/ENTER to do
+  // it. The label/icon feeds the big on-screen button.
   const action = actionFor(ctx);
-  G.hint = action ? action.label : "";
-  if (action && input.pressed("Space") && chef.interactCD <= 0) {
+  G.prompt = action ? { label: action.label, icon: action.icon } : null;
+  if (action && (input.pressed("Space") || input.pressed("Enter"))) {
     action.run();
-    chef.interactCD = 0.14;
+    if (action.cooks) c.cookT = COOK_PULSE;
+  }
+}
+
+function pushOut(
+  c: { x: number; z: number; vx: number; vz: number },
+  ox: number,
+  oz: number,
+  minDist: number,
+): void {
+  const dx = c.x - ox;
+  const dz = c.z - oz;
+  const d = Math.hypot(dx, dz);
+  if (d < minDist && d > 0.0001) {
+    const push = (minDist - d) / d;
+    c.x += dx * push;
+    c.z += dz * push;
   }
 }

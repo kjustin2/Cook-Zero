@@ -1,79 +1,69 @@
-// Serving: scoring, combo multiplier, reputation, and all the juice that fires
-// when a plate lands in front of a happy customer.
+// Serving: a friendly score, a purely-celebratory combo, and all the juice that
+// fires when a happy guest gets their food. No prices, no reputation, no math the
+// kid has to do — just bigger, louder rewards when you're quick and perfect.
 
-import type { Customer, GameState, PlatePart } from "./types";
+import type { Customer, FoodId, Quality } from "./types";
 import type { Ctx } from "./ctx";
-import { PRICE_LEVELS, COMBO_CAP, ON_FIRE_AT, REP_GOOD, REP_PERFECT } from "./balance";
-import { clamp } from "../core/math";
+import { food } from "./catalog";
+import { COIN_BASE, COIN_PERFECT, COMBO_WINDOW, FIRE_AT } from "./balance";
 
-/** Combo coin multiplier — grows 0.2 per chained serve, capped. */
-export const comboMult = (combo: number): number =>
-  1 + 0.2 * (clamp(combo, 1, COMBO_CAP) - 1);
+const YUMS = ["YUMMY!", "TASTY!", "WOW!", "SO GOOD!", "MMM!"];
 
-export function priceOf(s: GameState, basePrice: number): number {
-  return basePrice * (PRICE_LEVELS[s.priceLevel] ?? PRICE_LEVELS[2]).price;
-}
-
-function perfectCount(parts: PlatePart[]): number {
-  return parts.filter((p) => p.quality === "perfect").length;
-}
-
-/** Pay out a served customer. Assumes the carried plate already matched. */
-export function serveCustomer(ctx: Ctx, cust: Customer, parts: PlatePart[]): number {
+export function serveCustomer(ctx: Ctx, cust: Customer, served: FoodId, quality: Quality): number {
   const { G } = ctx;
-  const recipe = cust.recipe;
-  const price = priceOf(G, recipe.basePrice);
-  const perfects = perfectCount(parts);
+  const perfect = quality === "perfect";
 
+  // Combo (just for sparkle): chain serves before the streak cools.
   G.combo += 1;
-  const mult = comboMult(G.combo);
-  const speedBonus = Math.round(6 * (cust.patience / Math.max(1, cust.maxPatience)));
-  const perfectMult = G.modifier?.perfectMult ?? 1;
-  const perfectBonus = perfects * 4 * perfectMult;
-  const payMult = (cust.payMult ?? 1) * (G.modifier?.payMult ?? 1);
-  const tip = Math.round(G.derived.tip);
-  const coins = Math.round((price + perfectBonus + speedBonus) * mult * payMult) + tip;
+  G.comboT = COMBO_WINDOW;
+  if (G.combo > G.bestCombo) G.bestCombo = G.combo;
 
+  const coins = Math.round((COIN_BASE + (perfect ? COIN_PERFECT : 0) + Math.min(8, G.combo)) * G.derived.coinMult);
   G.coins += coins;
-  G.dayCoins += coins;
-  G.comboTimer = G.derived.comboWindow;
+  G.servedToday += 1;
+  G.happyToday += 1;
 
-  // Reputation (critics swing harder).
-  const repGain = (perfects > 0 ? REP_PERFECT : REP_GOOD) * G.derived.repGainMult * (cust.repMult ?? 1);
-  G.rep = clamp(G.rep + repGain, 0, 100);
-
-  // Stats.
-  G.stats.served++;
-  G.dayStats.served++;
-  if (perfects > 0) {
-    G.stats.perfect++;
-    G.dayStats.perfect++;
-  }
-  if (G.combo > G.stats.bestCombo) G.stats.bestCombo = G.combo;
-
-  // Customer state → happy walk-off.
-  cust.state = "served";
-  cust.happy = true;
+  // Customer → over-the-moon, then strolls out.
+  cust.served = true;
   cust.servedT = 0;
+  cust.hop = 1;
+  cust.mood = 1;
 
-  // Juice.
+  // ── Reward burst ──
   ctx.sfx.serve(G.combo);
   ctx.sfx.coin();
-  ctx.fx.coins(cust.x, cust.z);
-  ctx.fx.ring(cust.x, cust.z, 0x7CFF6b);
-  ctx.fx.float(`+$${coins}`, cust.x, cust.z, { color: "#9dff7a", big: mult >= 1.6 || cust.kind === "vip" });
-  ctx.fx.float("❤", cust.x - 0.6, cust.z + 0.5, { color: "#ff9ad1", big: true });
-  if (perfects > 0) ctx.fx.float("PERFECT!", cust.x, cust.z + 0.4, { color: "#ffe066", big: true });
-  if (cust.kind === "vip") ctx.fx.float("👑 VIP", cust.x, cust.z + 0.9, { color: "#ffd24a" });
-  if (cust.kind === "critic") ctx.fx.float("📸 5★", cust.x, cust.z + 0.9, { color: "#9be7ff" });
-  ctx.fx.shake(0.18 + Math.min(0.25, (mult - 1) * 0.15));
+  ctx.fx.coins(cust.x, cust.z, perfect ? 5 : 3);
+  ctx.fx.hearts(cust.x, cust.z);
+  ctx.fx.ring(cust.x, cust.z, perfect ? 0xffe066 : 0x7cff8a);
+  ctx.fx.punch(0.5);
+  ctx.fx.shake(0.14);
+  ctx.fx.float(perfect ? "PERFECT! ⭐" : YUMS[G.combo % YUMS.length], cust.x, cust.z + 0.4, {
+    color: perfect ? "#ffe066" : "#9dff7a",
+    big: perfect,
+  });
+  ctx.fx.float(food(served).icon, cust.x, cust.z, { big: true });
+  if (perfect) {
+    // a perfect plate gets a proper star-burst so it clearly out-juices a normal serve
+    ctx.fx.burst(cust.x, cust.z + 0.6, 0xffe066, 16);
+    ctx.fx.sparkle(cust.x, cust.z + 0.4);
+    ctx.fx.ring(cust.x, cust.z, 0xffd24a);
+  }
 
-  if (G.combo === ON_FIRE_AT) {
-    ctx.sfx.onFire();
-    ctx.fx.float("ON FIRE!", G.chef.x, G.chef.z, { color: "#ff7a3d", big: true });
+  if (G.derived.sparkle) {
+    ctx.fx.burst(cust.x, cust.z + 0.5, 0xff8fc4, 12);
+    G.comboT = COMBO_WINDOW; // sparkle treat: the streak never cools mid-serve
   }
-  if (mult >= 1.4) {
-    ctx.fx.float(`x${mult.toFixed(1)} COMBO`, cust.x, cust.z - 0.5, { color: "#ffd24a" });
+  if (G.combo === FIRE_AT) {
+    ctx.sfx.yay();
+    ctx.fx.float("ON A ROLL! 🔥", G.chef.x, G.chef.z + 0.5, { color: "#ff7a3d", big: true });
   }
+  // Every few serves in a row is a little celebration the kid builds toward.
+  if (G.combo >= 3 && G.combo % 3 === 0) {
+    ctx.sfx.star();
+    ctx.fx.coins(cust.x, cust.z, 6);
+    ctx.fx.float(`⭐ x${G.combo}!`, cust.x, cust.z + 1.0, { color: "#ffd24a", big: true });
+  }
+
+  ctx.music.setIntensity(Math.min(1, G.combo / 8));
   return coins;
 }

@@ -1,114 +1,101 @@
-// Day/shift flow: starting a shift, tallying results, paying the helper wage,
-// and rolling the between-day shop + upgrade offers. The phase machine lives in
-// main.ts; these are the transitions it calls.
+// Day flow: starting a shift, tallying stars, and rolling the treat offer. The
+// phase machine lives in main.ts; these are the transitions it calls. The run is
+// always winnable — finishing a day never ends the game early, it just scores it.
 
 import type { Ctx } from "./ctx";
 import type { GameState } from "./types";
-import { QUOTAS, SHIFT_LEN, TOTAL_DAYS } from "./balance";
-import { items } from "./grid";
-import { clearSlot } from "./cooking";
-import { recomputeDerived } from "./adjacency";
-import { RECIPES } from "./catalog";
-import { rollModifier } from "./modifiers";
-import { rollShop } from "./shop";
-import { rollUpgrades } from "./upgrades";
-import { startCutscene } from "./cutscene";
-import { DAY_THEMES, storyForDay } from "./story";
-import { loadMeta, saveMeta } from "../core/save";
+import { DAY_GOAL, DAY_GUESTS, MAX_DAY, SPAWN_GAP } from "./balance";
+import { clearSlot } from "./stations";
+import { recomputeDerived, countTreat } from "./state";
+import { growGarden } from "./garden";
+import { rollTreats } from "./upgrades";
+import { DAY_THEMES } from "./story";
+import { loadMeta, saveMeta, saveRun } from "../core/save";
 
-/** Begin (or restart) the current day's shift. */
-export function startDay(ctx: Ctx): void {
-  const s = ctx.G;
-  s.dayTime = SHIFT_LEN;
-  s.dayCoins = 0;
-  s.quota = QUOTAS[Math.min(s.day - 1, QUOTAS.length - 1)];
-  s.dayCard = { title: `Night ${s.day}`, sub: DAY_THEMES[s.day - 1] ?? "", t: 0 };
-  s.customers = [];
-  s.spawnTimer = 1.6;
+/** Reset the chef + diner for a fresh shift (shared by tutorial + real days). */
+function resetShift(s: GameState): void {
+  s.servedToday = 0;
+  s.happyToday = 0;
   s.combo = 0;
-  s.comboTimer = 0;
-  s.carry = null;
+  s.comboT = 0;
+  s.fire = 0;
+  s.customers = [];
+  for (const tb of s.tables) tb.occupied = 0;
+  for (const st of s.stations) for (const sl of st.slots) clearSlot(sl);
+  s.chef.carry = null;
   s.chef.x = 0;
-  s.chef.z = 5;
+  s.chef.z = -5.5;
+  s.chef.vx = 0;
+  s.chef.vz = 0;
   s.chef.dashT = 0;
-  s.chef.dashCD = 0;
-  s.dayStats = { served: 0, perfect: 0, expired: 0 };
-  s.modifier = rollModifier(ctx.rng, s.day);
-  // Fresh stations: clear leftover cooking + plates.
-  for (const it of items(s.grid)) {
-    if (it.slots) for (const sl of it.slots) clearSlot(sl);
-    if (it.plate) it.plate = [];
-  }
-  recomputeDerived(s);
-  ctx.music.start();
-  ctx.music.setIntensity(0);
-  // Announce newly-unlocked dishes (or the day's modifier if none).
-  const newDishes = RECIPES.filter((r) => r.minDay === s.day);
-  if (s.day > 1 && newDishes.length) {
-    s.toast = { text: `🆕 New dish: ${newDishes.map((r) => `${r.icon} ${r.name}`).join(", ")}!`, t: 0 };
-  } else if (s.modifier) {
-    s.toast = { text: `${s.modifier.icon} ${s.modifier.name} — ${s.modifier.desc}`, t: 0 };
-  }
+  s.chef.dashCd = 0;
 }
 
-/** 0–3 star rating for the shift just finished. */
+/** Begin the current day's shift (G.day already set). */
+export function startDay(ctx: Ctx): void {
+  const s = ctx.G;
+  recomputeDerived(s);
+
+  if (s.tutorial) {
+    // The guided first shift: no clock, a tiny, calm queue of burger orders.
+    s.tutorialStep = 0;
+    s.tutorialServed = 0;
+    s.dayLen = 999;
+    s.dayTime = 999;
+    s.goal = 3;
+    s.spawnQueue = 3;
+    s.spawnGap = 7;
+    s.spawnTimer = 1.6;
+    resetShift(s);
+    s.dayCard = { title: "Let's Learn! 🎓", sub: "Follow the glowing arrow", t: 0 };
+    ctx.music.cue("cooking");
+    ctx.music.setIntensity(0);
+    return;
+  }
+
+  growGarden(s); // the garden flourishes a little more each real day
+  recomputeDerived(s); // fold the new bloom into patience
+  const i = Math.max(0, Math.min(MAX_DAY - 1, s.day - 1));
+
+  s.dayLen = s.derived.levelTime;
+  s.dayTime = s.dayLen;
+  s.goal = DAY_GOAL[i];
+  s.spawnQueue = DAY_GUESTS[i] + 2 * countTreat(s.treats, "extracustomer");
+  s.spawnGap = SPAWN_GAP[i];
+  s.spawnTimer = 1.4;
+  resetShift(s);
+
+  s.dayCard = { title: `Day ${s.day}`, sub: DAY_THEMES[i] ?? "", t: 0 };
+  ctx.music.cue("cooking");
+  ctx.music.setIntensity(0);
+  saveRun(s); // checkpoint: a quit now resumes at the start of this day
+}
+
+/** 1–3 star rating for the shift just finished (always at least 1 — kind). */
 export function computeStars(s: GameState): number {
-  let stars = 0;
-  if (s.dayCoins >= s.quota) stars++;
-  if (s.dayStats.expired <= 2) stars++;
-  const served = Math.max(1, s.dayStats.served);
-  if (s.dayStats.perfect / served >= 0.4 || s.rep >= 72) stars++;
-  return stars;
+  if (s.servedToday >= s.goal) return 3;
+  if (s.servedToday >= Math.ceil(s.goal * 0.6)) return 2;
+  return 1;
 }
 
 export interface DayResult {
-  passed: boolean;
-  dayCoins: number;
-  quota: number;
-  wage: number;
+  stars: number;
+  served: number;
   isFinal: boolean;
 }
 
-/** Tally the shift just finished and pay wages. Does not change phase. */
+/** Tally the shift, save best stats. Does not change phase. */
 export function finishDay(ctx: Ctx): DayResult {
   const s = ctx.G;
-  const passed = s.dayCoins >= s.quota;
-  const wage = s.helper.hired ? s.helper.wage : 0;
-  s.coins = Math.max(0, s.coins - wage);
-  s.lastDayPassed = passed;
-  s.dayStars = computeStars(s);
-  recordMeta(s);
-  ctx.music.stop();
-  return { passed, dayCoins: s.dayCoins, quota: s.quota, wage, isFinal: s.day >= TOTAL_DAYS };
-}
-
-/** Roll the manager's shop + upgrade offers for this visit. */
-export function prepareManage(ctx: Ctx): void {
-  const s = ctx.G;
-  rollShop(s, ctx.rng);
-  s.upgradeOffer = rollUpgrades(ctx.rng, s.upgrades);
-  s.manageTab = "shop";
-}
-
-/** Start a day, playing its opening cutscene first if it has one. */
-export function beginDay(ctx: Ctx): void {
-  const beats = storyForDay(ctx.G.day);
-  const go = () => {
-    startDay(ctx);
-    ctx.G.phase = "playing";
-  };
-  if (beats) startCutscene(ctx.G, beats, go, `Night ${ctx.G.day}`);
-  else go();
-}
-
-export function recordMeta(s: GameState): void {
+  s.stars = computeStars(s);
   const meta = loadMeta();
-  meta.bestDay = Math.max(meta.bestDay, s.lastDayPassed ? s.day : s.day - 1);
-  meta.bestCoins = Math.max(meta.bestCoins, s.coins);
-  meta.bestCombo = Math.max(meta.bestCombo, s.stats.bestCombo);
-  meta.bestRep = Math.max(meta.bestRep, Math.round(s.rep));
-  meta.bestStars = Math.max(meta.bestStars, s.dayStars);
+  meta.bestDay = Math.max(meta.bestDay, s.day);
+  meta.bestStars = Math.max(meta.bestStars, s.stars);
   saveMeta(meta);
+  return { stars: s.stars, served: s.servedToday, isFinal: s.day >= MAX_DAY };
 }
 
-export const isFinalDay = (s: GameState): boolean => s.day >= TOTAL_DAYS;
+/** Roll the three treats offered between days. */
+export function prepareTreats(ctx: Ctx): void {
+  ctx.G.treatChoices = rollTreats(ctx.rng, ctx.G);
+}
