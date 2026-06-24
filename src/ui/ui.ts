@@ -309,7 +309,8 @@ export class UI {
     // Open the customizer on the category the game state asks for (lets debug
     // scenarios cut straight to e.g. the Diner section with a room-framed preview).
     if (phase === "setup" || phase === "manage") {
-      this.czCat = CZ_CATS.some(([k]) => k === G.studioCat) ? (G.studioCat as CzCat) : "chef";
+      const cats = phase === "setup" ? CZ_CATS_SETUP : CZ_CATS;
+      this.czCat = cats.some(([k]) => k === G.studioCat) ? (G.studioCat as CzCat) : "chef";
     }
     if (phase === "title") this.screens.innerHTML = this.titleHtml();
     else if (phase === "setup") this.screens.innerHTML = this.setupHtml(G);
@@ -353,11 +354,7 @@ export class UI {
         <div class="subtitle">Name it, choose your food &amp; friends, then make it yours. Watch it change behind you!</div>
         <div class="cz-panel" data-cz-panel>
           ${this.nameSection(c)}
-          ${this.customizerHtml(G)}
-          <div class="cz-group">
-            <div class="cz-title">🔀 Layout — place your tables &amp; equipment</div>
-            ${this.arrangePanel(G)}
-          </div>
+          ${this.customizerHtml(G, true)}
         </div>
         <button class="btn big" data-finishsetup>🚪 Open My Diner!</button>
       </div>`;
@@ -377,8 +374,9 @@ export class UI {
   /** The shared colour/menu/pet/look editor used by setup + the manage screen.
    *  One category is shown at a time (picked from a friendly icon bar) so a young
    *  kid sees a focused, un-cluttered set of choices instead of a wall of swatches. */
-  private customizerHtml(G: GameState): string {
-    const bar = CZ_CATS.map(([k, ic, nm]) =>
+  private customizerHtml(G: GameState, withLayout = false): string {
+    const cats = withLayout ? CZ_CATS_SETUP : CZ_CATS;
+    const bar = cats.map(([k, ic, nm]) =>
       `<button class="cz-cat${k === this.czCat ? " on" : ""}" data-czcat="${k}">
          <span class="cz-cat-ic">${ic}</span><span class="cz-cat-nm">${nm}</span></button>`,
     ).join("");
@@ -445,6 +443,11 @@ export class UI {
           <div class="cz-title">🌸 Flowers</div>
           <div class="cz-row col"><span class="cz-label">Type</span><div class="chip-list">${this.plantTypeChips(c)}</div></div>
           ${c.plants.map((p, i) => this.swatchRow(`Pot ${i + 1}`, `plants.${i}.bloom`, p.bloom, SWATCHES)).join("")}
+        </div>`;
+      case "layout":
+        return `<div class="cz-group">
+          <div class="cz-title">🔀 Layout — place your tables &amp; equipment</div>
+          ${this.arrangePanel(G)}
         </div>`;
     }
   }
@@ -702,7 +705,11 @@ export class UI {
         this.czCat = (el as HTMLElement).dataset.czcat as CzCat;
         this.screens.querySelectorAll("[data-czcat]").forEach((b) => b.classList.toggle("on", b === el));
         const sec = this.screens.querySelector("[data-cz-section]");
-        if (sec) { sec.innerHTML = this.czSection(G); this.wireCzControls(); }
+        if (sec) {
+          sec.innerHTML = this.czSection(G);
+          this.wireCzControls();
+          if (this.czCat === "layout") this.wireArrange(G); // the arrange map lives in this section
+        }
         this.ctrl.setStudioFocus(CZ_FOCUS[this.czCat], this.czCat);
       }),
     );
@@ -781,7 +788,7 @@ export class UI {
   }
 }
 
-type CzCat = "menu" | "chef" | "pet" | "diner" | "tables" | "gear" | "flowers";
+type CzCat = "menu" | "chef" | "pet" | "diner" | "tables" | "gear" | "flowers" | "layout";
 const CZ_CATS: Array<[CzCat, string, string]> = [
   ["menu", "🍽️", "Food"],
   ["chef", "🧑‍🍳", "Chef"],
@@ -791,9 +798,12 @@ const CZ_CATS: Array<[CzCat, string, string]> = [
   ["gear", "🍳", "Gear"],
   ["flowers", "🌸", "Flowers"],
 ];
+/** Setup also folds the table/equipment layout into the category bar, so it's one
+ *  focused section (reachable from the sticky nav) instead of a long scroll below. */
+const CZ_CATS_SETUP: Array<[CzCat, string, string]> = [...CZ_CATS, ["layout", "🔀", "Layout"]];
 /** What the live preview should frame for a category: the characters, or the room. */
 const CZ_FOCUS: Record<CzCat, "chef" | "room"> = {
-  menu: "room", chef: "chef", pet: "chef", diner: "room", tables: "room", gear: "room", flowers: "room",
+  menu: "room", chef: "chef", pet: "chef", diner: "room", tables: "room", gear: "room", flowers: "room", layout: "room",
 };
 
 const muteLabel = (muted: boolean): string => (muted ? "🔇 Sound: Off" : "🔊 Sound: On");

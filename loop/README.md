@@ -102,6 +102,36 @@ no restart needed.)
   leaves prior cycles and state intact (safe to stop and resume).
 - `loop/PROGRESS.md` is the human-readable running log across cycles.
 
+## Companion: the QA sweep (`npm run qa`)
+
+The AI-vision loop above judges screenshots against prose rubrics. Its faster,
+fully-deterministic sibling is **`scripts/loop/qa.mjs`** — it needs no model and
+runs in seconds. For every debug scenario it collects a screenshot, a **visual
+fingerprint** (`__SR.signature` — a downsampled RGB grid + luma/black/white/
+variance stats), **perf metrics** (`__SR.metrics`), a **game-state invariant
+report** (`__SR.invariants`), and any console errors, then:
+
+- **diffs each fingerprint against the committed baseline** (`loop/qa-baseline.json`)
+  to flag visual drift (a real regression — black screen, missing geometry, a
+  palette shift — shows as a large delta; the deterministic 3D frames sit at
+  ~0–1%),
+- writes an annotated **contact sheet** (`shots/qa/index.html`) with a perf /
+  invariant / visual-diff badge on every shot, an **AI-readable** `SUMMARY.md`,
+  and a machine-readable `report.json`,
+- exits non-zero on a *hard* failure: a degenerate frame (black/flat), an
+  invariant violation, a console error, or a draw-call budget breach. A baseline
+  visual DIFF is a warning unless `--strict`.
+
+```bash
+npm run qa                 # sweep → contact sheet + SUMMARY.md + diff vs baseline
+npm run qa:baseline        # re-bless loop/qa-baseline.json (refuses if any frame is degenerate)
+npm run qa:hud             # same, with the on-screen debug HUD overlaid on every shot
+```
+
+The same instrumentation (`src/debug/inspect.ts` + `hud.ts`) powers `smoke-visual`
+in `npm test` and the live, toggleable HUD (backtick / `?debug`). See the
+"Debug/QA harness surface" bullet in the top-level `CLAUDE.md`.
+
 ## The goals
 
 Defined in [`goals.mjs`](./goals.mjs) — the single source of truth, traced to the

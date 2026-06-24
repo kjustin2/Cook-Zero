@@ -300,10 +300,14 @@ html, body {
 /* Customizer: a big friendly icon category bar — the primary navigation — then
    ONE focused section at a time (so a kid never faces a wall of swatches). */
 .cz { display: flex; flex-direction: column; gap: 12px; }
+/* The icon bar is the PRIMARY navigation, so it sticks to the top of the scrolling
+   panel — a kid can always switch sections even after scrolling down to the last
+   swatch row. Opaque background so scrolled content never bleeds through it. */
 .cz-cats {
+  position: sticky; top: 0; z-index: 6;
   display: flex; gap: 4px; flex-wrap: nowrap; justify-content: center;
-  background: var(--panel); border: 2px solid var(--line); border-top: 4px solid var(--accent2);
-  border-radius: 18px; padding: 7px 6px; box-shadow: 0 5px 16px rgba(0, 0, 0, 0.3);
+  background: #2c1d44; border: 2px solid var(--line); border-top: 4px solid var(--accent2);
+  border-radius: 18px; padding: 7px 6px; box-shadow: 0 8px 18px rgba(0, 0, 0, 0.45);
 }
 .cz-cat {
   display: flex; flex-direction: column; align-items: center; gap: 2px;
@@ -319,7 +323,8 @@ html, body {
   box-shadow: 0 4px 0 #b8481c; border-color: transparent; transform: translateY(-1px);
 }
 .cz-cat.on .cz-cat-nm { color: #fff; }
-.cz-section { animation: cz-swap 0.22s ease backwards; }
+/* min-height reserves room so swapping to a shorter category doesn't jump the panel. */
+.cz-section { animation: cz-swap 0.22s ease backwards; min-height: 232px; }
 @keyframes cz-swap { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 .cz-hint { font-size: 13px; color: var(--muted); margin-bottom: 8px; }
 .chip-list.big { gap: 10px; }

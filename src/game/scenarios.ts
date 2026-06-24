@@ -137,7 +137,8 @@ export function runScenario(name: string, api: ScenarioApi): string {
       G.pet.x = 30; G.pet.z = 30; G.pet.tx = 30; G.pet.tz = 30; // park the pup off-stage
       G.customers.length = 0; for (const t of G.tables) t.occupied = 0;
       for (const st of G.stations) for (const sl of st.slots) sl.food = null;
-      const id = api.spawnGuest("burger", 4); // front-centre table
+      // A central, definitely-valid table (front-centre at 6 tables, else back-centre).
+      const id = api.spawnGuest("burger", G.tables.length > 4 ? 4 : 1);
       const cust = G.customers.find((c) => c.uid === id);
       if (cust) { cust.served = true; cust.servedT = 0.1; cust.mood = 1; cust.hop = 1; }
       G.chef.carry = null;

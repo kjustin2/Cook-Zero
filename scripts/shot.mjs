@@ -11,8 +11,9 @@ const PORT = 5188;
 const URL = `http://localhost:${PORT}`;
 const isWin = platform() === "win32";
 
-const srv = spawn(isWin ? "npx.cmd" : "npx", ["vite", "--port", String(PORT), "--strictPort"], { stdio: "ignore", shell: isWin });
-const kill = () => { if (isWin) spawnSync("taskkill", ["/pid", String(srv.pid), "/T", "/F"], { stdio: "ignore" }); else process.kill(-srv.pid, "SIGKILL"); };
+// windowsHide: no console-window flash, so the spawn never steals foreground focus.
+const srv = spawn(isWin ? "npx.cmd" : "npx", ["vite", "--port", String(PORT), "--strictPort"], { stdio: "ignore", shell: isWin, windowsHide: true });
+const kill = () => { if (isWin) spawnSync("taskkill", ["/pid", String(srv.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true }); else process.kill(-srv.pid, "SIGKILL"); };
 
 async function up() {
   for (let i = 0; i < 60; i++) {

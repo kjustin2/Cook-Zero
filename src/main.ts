@@ -30,6 +30,8 @@ import { FxSystem } from "./render/fx";
 import { WebSfx } from "./audio/sfx";
 import { WebMusic } from "./audio/music";
 import { UI, type GameController } from "./ui/ui";
+import { Inspector } from "./debug/inspect";
+import { DebugHud } from "./debug/hud";
 
 const canvas = document.getElementById("game") as HTMLCanvasElement;
 const uiRoot = document.getElementById("ui") as HTMLElement;
@@ -45,6 +47,13 @@ const sfx = new WebSfx();
 const music = new WebMusic();
 
 const ctx: Ctx = { G, input, rng, fx, sfx, music };
+
+// Debug/QA harness instrumentation: live frame-perf + scene metrics, a visual
+// fingerprint for regression diffing, a game-state invariant net, and a
+// toggleable on-screen HUD (backtick / ?debug). Inert unless read or shown.
+const inspect = new Inspector(stage, fx, G);
+// Mount on <body>, not the UI root (the UI clears its root's innerHTML on build).
+const hud = new DebugHud(document.body);
 
 if (G.muted) {
   sfx.setMuted(true);
@@ -252,7 +261,8 @@ let inCinePrev = false;
 let lastPaused = false;
 
 function frame(now: number): void {
-  const dt = Math.min(0.05, (now - last) / 1000);
+  const rawMs = now - last; // real wall-clock frame interval (uncapped) for perf
+  const dt = Math.min(0.05, rawMs / 1000);
   last = now;
   input.beginFrame();
   G.t += dt;
@@ -278,13 +288,17 @@ function frame(now: number): void {
   fx.update(dt);
   view.update(G, dt);
   stage.update(dt);
+  const r0 = performance.now();
   stage.render(dt);
+  inspect.sample(rawMs, performance.now() - r0);
 
   if (G.paused !== lastPaused) {
     lastPaused = G.paused;
     ui.showPause(G.paused);
   }
   ui.frame(G);
+  // Lazy: metrics() (which runs the invariant sweep) is only built when shown.
+  hud.update(rawMs, () => inspect.metrics(), inspect.lastScenario);
 
   requestAnimationFrame(frame);
 }
@@ -339,6 +353,46 @@ function doQuickStart(): void {
   ctx.fx.clear();
 }
 
+// Drive the FULL per-frame pipeline (sim + cutscene + fx + camera + render) N
+// times WITHOUT input/rAF — lets headless QA probes settle the camera, age FX,
+// and accumulate real frame-timing samples deterministically before a metric or
+// signature read. Mirrors frame() minus input/UI/time-of-day.
+function stepRender(dt: number): void {
+  const t0 = performance.now();
+  stepSim(dt);
+  if (G.cutscene) tickCutscene(ctx, dt);
+  fx.update(dt);
+  view.update(G, dt);
+  stage.update(dt);
+  const r0 = performance.now();
+  stage.render(dt);
+  const now = performance.now();
+  inspect.sample(now - t0, now - r0);
+}
+function renderFrames(n: number, dt = 1 / 60): void {
+  for (let i = 0; i < Math.max(1, n | 0); i++) stepRender(dt);
+}
+
+/** Cut to a scenario, settle it over `frames` real frames, then return the full
+ *  QA snapshot (visual fingerprint + perf metrics + invariant report) in one go. */
+function probeScenario(name: string, frames = 12): {
+  label: string;
+  metrics: ReturnType<Inspector["metrics"]>;
+  signature: ReturnType<Inspector["signature"]>;
+  invariants: ReturnType<Inspector["invariants"]>;
+} {
+  inspect.reset();
+  const label = runScenario(name, scenarioApi);
+  inspect.lastScenario = name;
+  renderFrames(frames);
+  return {
+    label,
+    metrics: inspect.metrics(),
+    signature: inspect.signature(),
+    invariants: inspect.invariants(),
+  };
+}
+
 // The toolkit the debug scenarios drive the game through (see game/scenarios.ts).
 const scenarioApi: ScenarioApi = {
   ctx,
@@ -388,6 +442,14 @@ interface TestApi {
   info: () => { calls: number; tris: number; geometries: number; textures: number; castShadow: boolean; pixelRatio: number; quality: string };
   drawCalls: () => number;
   setQuality: (q: "high" | "low") => void;
+  // ── Debug/QA harness surface ──
+  metrics: () => ReturnType<Inspector["metrics"]>;
+  signature: (w?: number, h?: number) => ReturnType<Inspector["signature"]>;
+  invariants: () => ReturnType<Inspector["invariants"]>;
+  probe: (name: string, frames?: number) => ReturnType<typeof probeScenario>;
+  renderFrames: (n: number, dt?: number) => void;
+  resetPerf: () => void;
+  hud: (on?: boolean) => boolean;
 }
 
 const api: TestApi = {
@@ -396,7 +458,7 @@ const api: TestApi = {
   ctrl: controller,
   tick: (dt = 1 / 60) => stepSim(dt),
   tickN: (dt, n) => { for (let i = 0; i < n; i++) stepSim(dt); },
-  scenario: (name) => runScenario(name, scenarioApi),
+  scenario: (name) => { const label = runScenario(name, scenarioApi); inspect.lastScenario = name; return label; },
   scenarios: () => SCENARIOS,
   interact: doInteract,
   actionLabel: () => actionFor(ctx)?.label ?? null,
@@ -428,6 +490,7 @@ const api: TestApi = {
     quality: stage.quality,
   }),
   drawCalls: () => {
+    stage.renderer.info.reset(); // autoReset is off (see Stage); reset before a one-off count
     stage.renderer.render(stage.scene, stage.camera);
     return stage.renderer.info.render.calls;
   },
@@ -435,6 +498,16 @@ const api: TestApi = {
     G.quality = q;
     stage.applyQuality(q);
   },
+  metrics: () => inspect.metrics(),
+  signature: (w, h) => inspect.signature(w, h),
+  invariants: () => inspect.invariants(),
+  probe: (name, frames) => probeScenario(name, frames),
+  renderFrames: (n, dt) => renderFrames(n, dt),
+  resetPerf: () => inspect.reset(),
+  hud: (on) => { if (typeof on === "boolean") hud.setVisible(on); else hud.toggle(); return hud.visible; },
 };
 (window as unknown as { __G: typeof G; __SR: TestApi }).__G = G;
 (window as unknown as { __G: typeof G; __SR: TestApi }).__SR = api;
+// Render-side handles for the vision/debug tooling (scene-graph introspection).
+(window as unknown as { __stage: Stage; __view: SceneView }).__stage = stage;
+(window as unknown as { __stage: Stage; __view: SceneView }).__view = view;

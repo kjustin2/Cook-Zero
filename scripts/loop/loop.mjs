@@ -89,7 +89,7 @@ function runImplementer(cmd, n, dir) {
     SR_LOOP_REPORT: join(dir, "report.md"),
     SR_LOOP_DECISION: join(dir, "decision.json"),
   };
-  const res = spawnSync(cmd, { cwd: ROOT, shell: true, stdio: "inherit", env });
+  const res = spawnSync(cmd, { cwd: ROOT, shell: true, stdio: "inherit", env, windowsHide: true });
   return res.status === 0;
 }
 

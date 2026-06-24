@@ -81,6 +81,23 @@ const fail = await withGame(async ({ page, check }) => {
     return G.pet.kind;
   });
   check("all pet kinds render", lastKind === "bunny");
+
+  // Regression: the setup studio folds the table/equipment layout into the
+  // customizer category bar (reachable from the sticky nav), and opening it pulls
+  // the live preview back to frame the whole room — "zoom to what you're editing".
+  const layout = await page.evaluate(async () => {
+    window.__SR.scenario("setup"); // drive back into the build-your-diner studio
+    const wait = () => new Promise((r) => requestAnimationFrame(() => r()));
+    let btn = null;
+    for (let i = 0; i < 60 && !btn; i++) { await wait(); btn = document.querySelector('[data-czcat="layout"]'); }
+    const hasLayout = !!btn;
+    if (btn) btn.click();
+    for (let i = 0; i < 10; i++) await wait();
+    return { hasLayout, focus: window.__G.studioFocus, mapTokens: document.querySelectorAll(".map-token").length };
+  });
+  check("setup folds Layout into the customizer bar", layout.hasLayout);
+  check("opening Layout frames the whole room", layout.focus === "room");
+  check("Layout shows the draggable arrange map", layout.mapTokens > 0, `tokens=${layout.mapTokens}`);
 });
 
 finish("SETUP", fail);

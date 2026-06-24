@@ -335,6 +335,21 @@ export class FxSystem implements Fx {
     this.stage.punchZoom(amount);
   }
 
+  /** Live pool occupancy for the debug HUD / invariant checks. Confirms the
+   *  pooled FX never overrun their caps (a leak shows up as `particles` pinned
+   *  at `maxParticles` or active sprites that never free). */
+  debugStats(): { particles: number; maxParticles: number; rings: number; coins: number; hearts: number; floaters: number } {
+    const active = (a: Array<{ active: boolean }>) => a.reduce((n, x) => n + (x.active ? 1 : 0), 0);
+    return {
+      particles: this.particles.length,
+      maxParticles: MAX_P,
+      rings: active(this.rings),
+      coins: active(this.coinPool),
+      hearts: active(this.heartPool),
+      floaters: active(this.floaters),
+    };
+  }
+
   // ── Frame update ──
   update(dt: number): void {
     const pos = this.posAttr.array as Float32Array;

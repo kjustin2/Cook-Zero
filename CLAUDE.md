@@ -158,6 +158,22 @@ mutates gameplay.
   `gotoCustomer(uid)`, `spawnGuest(order,table)`, `quickStart()`, `skipStory()`,
   `finishDay()`, `nextDay()`, `chooseTreat(id)`, `stars()`, `guide()`,
   `info()`/`drawCalls()`/`setQuality()`.
+- **Debug/QA harness surface** (`src/debug/`, exposed on `__SR` + `window.__stage`/
+  `__view`). `Inspector` (`debug/inspect.ts`) turns the live game into something
+  measurable: `__SR.metrics()` (rolling fps + frame-ms p99/1%-low, a real
+  per-frame `renderer.info` snapshot — draw calls accumulate across shadow+scene+
+  post since `Stage` sets `info.autoReset=false`, so `calls`/`tris` are the TRUE
+  cost — FX-pool occupancy, game-state summary); `__SR.signature(w,h)` a
+  dependency-free visual fingerprint (downsampled RGB grid + luma/black/white/
+  colourfulness/variance — catches black-screen / missing-geometry / wash-out /
+  palette regressions with numbers, no PNG decode); `__SR.invariants()` a
+  game-state sanity battery (chef in `FLOOR`, no NaN, patience/timers in range,
+  pools not overrun, …); `__SR.probe(name,frames)` cuts to a scenario, settles it,
+  and returns `{signature,metrics,invariants}` in one call; `__SR.renderFrames`/
+  `resetPerf`. A toggleable on-screen **debug HUD** (`debug/hud.ts`, backtick /
+  `?debug`, or `__SR.hud(on)`) draws all of it (incl. a frame-time sparkline +
+  invariant status) so a screenshot shows perf+state — for the human and the AI
+  vision pass.
 - **Debug scenario system** (`game/scenarios.ts`, exposed as `__SR.scenario(name)`
   + `__SR.scenarios()`). A scenario is a deterministic "cut" that drives the game
   straight into a named situation for tests + screenshots — `title`, `play`,
@@ -183,9 +199,14 @@ guests, near-impossible burning — so a kid wins and has fun.
   **no bloom pass** (`stage.buildPost`), in line with the no-glow pillar.
 - Hot paths avoid per-frame allocation: pooled particles/coins/hearts/floaters in
   one capped buffer; uid/key-keyed view maps build once and dispose on removal;
-  the beacon icon texture is cached by string. `smoke-perf` guards a draw-call
-  budget (`< 700`), bounded geometry (`< 3000`) and texture (`< 400`) counts, a
-  sub-1ms sim step, and that the quality toggle drives `keyLight.castShadow`.
+  the beacon icon texture is cached by string. `smoke-perf` guards a scene-only
+  draw-call budget (`< 700`), bounded geometry (`< 3000`) and texture (`< 400`)
+  counts, a sub-1ms sim step, and that the quality toggle drives
+  `keyLight.castShadow`. It also probes the heaviest scenarios for a full-frame
+  draw-call ceiling (`metrics.render.calls < 800` — that count includes the
+  shadow + post passes), a **geometry/texture leak guard across a SceneView
+  rebuild** (recolour to `white-diner` and back; counts must not grow), and that
+  the frame-timing instrumentation is live.
 
 ## Testing notes
 
@@ -206,8 +227,24 @@ guests, near-impossible burning — so a kid wins and has fun.
   - **Real play** (`playthrough/soak`) drive the REAL game via real DOM clicks +
     keyboard: click Play, skip the cutscene, walk + press the action button; soak
     mashes random keys for ~8s watching for runtime errors.
+  - **Visual smoke** (`smoke-visual`) cuts to EVERY scenario via `__SR.probe` and
+    asserts each rendered frame isn't degenerate (not black, has structure, not
+    blown-out white, drew real geometry), that the invariant battery holds, and
+    the per-frame draw-call budget — the regression net for the full-black-screen
+    class that logic-only/mock-canvas tests can't see.
   All suites fail on any `console.error`/pageerror (benign AudioContext + the
   headless `glBlitFramebuffer` warnings are filtered).
+- **`npm run qa`** (`scripts/loop/qa.mjs`) is the one-command QA sweep: it probes
+  every scenario (screenshot + visual fingerprint + perf metrics + invariants +
+  console errors), **diffs each fingerprint against the committed baseline**
+  (`loop/qa-baseline.json`), and writes `shots/qa/{index.html,SUMMARY.md,report.json}`
+  — an annotated contact sheet (perf/invariant/visual-diff badges per shot) for a
+  human or Claude's vision pass, plus an AI-readable summary. Exits non-zero on a
+  hard failure (degenerate frame / invariant violation / console error / budget
+  breach); a baseline visual DIFF is a warning unless `--strict`. `npm run qa:baseline`
+  re-blesses the baseline (refuses if any frame is degenerate); `npm run qa:hud`
+  overlays the debug HUD on every shot; `npm run audit` is a deeper look-and-feel
+  crop pass over the customizer + gameplay-clarity scenarios.
 - **`npm run shots`** (`scripts/shots-flow.mjs`) boots a server and walks the WHOLE
   journey (title → intro → tutorial → serve "PERFECT" → setup character preview →
   recolour/custom diner → cook → day-complete → manage tabs → win), saving a fresh

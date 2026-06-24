@@ -15,6 +15,7 @@ const SMOKES = [
   "smoke-pet-garden.mjs",
   "smoke-setup.mjs",
   "smoke-scenarios.mjs",
+  "smoke-visual.mjs",
   "smoke-save.mjs",
   "smoke-flow.mjs",
   "smoke-story.mjs",
@@ -27,7 +28,9 @@ const isWin = platform() === "win32";
 
 function startServer() {
   const cmd = isWin ? "npx.cmd" : "npx";
-  return spawn(cmd, ["vite", "--port", String(PORT), "--strictPort"], { stdio: "ignore", shell: isWin });
+  // windowsHide: never let the spawned console window flash to the foreground and
+  // steal the user's focus (it would yank the active window back to the terminal).
+  return spawn(cmd, ["vite", "--port", String(PORT), "--strictPort"], { stdio: "ignore", shell: isWin, windowsHide: true });
 }
 
 async function waitForServer(timeoutMs = 30000) {
@@ -46,14 +49,14 @@ async function waitForServer(timeoutMs = 30000) {
 
 function killTree(pid) {
   if (!pid) return;
-  if (isWin) spawnSync("taskkill", ["/pid", String(pid), "/T", "/F"], { stdio: "ignore" });
+  if (isWin) spawnSync("taskkill", ["/pid", String(pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
   else {
     try { process.kill(-pid, "SIGKILL"); } catch { try { process.kill(pid, "SIGKILL"); } catch { /* gone */ } }
   }
 }
 
 function runSmoke(file) {
-  const res = spawnSync(process.execPath, ["scripts/" + file], { stdio: "inherit", env: { ...process.env, SR_URL: URL } });
+  const res = spawnSync(process.execPath, ["scripts/" + file], { stdio: "inherit", windowsHide: true, env: { ...process.env, SR_URL: URL } });
   return res.status === 0;
 }
 

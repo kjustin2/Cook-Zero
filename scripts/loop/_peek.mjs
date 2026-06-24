@@ -22,7 +22,7 @@ try {
     G.pet.x = 13; G.pet.z = 9; G.pet.tx = 13; G.pet.tz = 9;
     G.customers.length = 0; for (const t of G.tables) t.occupied = 0;
     for (const st of G.stations) for (const sl of st.slots) sl.food = null;
-    const id = SR.spawnGuest("burger", 4);
+    const id = SR.spawnGuest("burger", G.tables.length > 4 ? 4 : 1);
     G.chef.carry = { kind: "ready", food: "burger", quality: "perfect" };
     SR.gotoCustomer(id); SR.interact(); // single, faithful real serve
     G.chef.x = -11; G.chef.z = 6; G.prompt = null; // step clear of the prompt pill

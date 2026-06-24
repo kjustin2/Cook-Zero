@@ -16,8 +16,9 @@ const DIR = "shots/flow";
 rmSync(DIR, { recursive: true, force: true }); // fresh storyboard every run
 mkdirSync(DIR, { recursive: true });
 
-const srv = spawn(isWin ? "npx.cmd" : "npx", ["vite", "--port", String(PORT), "--strictPort"], { stdio: "ignore", shell: isWin });
-const kill = () => { try { if (isWin) spawnSync("taskkill", ["/pid", String(srv.pid), "/T", "/F"], { stdio: "ignore" }); else process.kill(-srv.pid, "SIGKILL"); } catch { /* gone */ } };
+// windowsHide: no console-window flash, so the spawn never steals foreground focus.
+const srv = spawn(isWin ? "npx.cmd" : "npx", ["vite", "--port", String(PORT), "--strictPort"], { stdio: "ignore", shell: isWin, windowsHide: true });
+const kill = () => { try { if (isWin) spawnSync("taskkill", ["/pid", String(srv.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true }); else process.kill(-srv.pid, "SIGKILL"); } catch { /* gone */ } };
 process.on("exit", kill);
 
 async function up() {

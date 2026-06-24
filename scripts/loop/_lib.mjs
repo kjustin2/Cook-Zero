@@ -33,13 +33,14 @@ export function ensureDir(dir) { mkdirSync(dir, { recursive: true }); }
 export function startServer(port) {
   const cmd = isWin ? "npx.cmd" : "npx";
   return spawn(cmd, ["vite", "--port", String(port), "--strictPort"], {
-    cwd: ROOT, stdio: "ignore", shell: isWin, detached: !isWin,
+    // windowsHide: suppress the console-window flash that would steal foreground focus.
+    cwd: ROOT, stdio: "ignore", shell: isWin, detached: !isWin, windowsHide: true,
   });
 }
 export function killTree(child) {
   if (!child || !child.pid) return;
   try {
-    if (isWin) spawnSync("taskkill", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore" });
+    if (isWin) spawnSync("taskkill", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
     else process.kill(-child.pid, "SIGKILL");
   } catch { /* already gone */ }
 }

@@ -54,7 +54,7 @@ export function hasClaudeCli() {
   _cliChecked = true;
   if (process.env.SR_LOOP_VISION === "api" || process.env.SR_LOOP_VISION === "off") return (_cliAvailable = false);
   try {
-    const r = spawnSync("claude", ["--version"], { encoding: "utf8", shell: isWin, timeout: 15000 });
+    const r = spawnSync("claude", ["--version"], { encoding: "utf8", shell: isWin, timeout: 15000, windowsHide: true });
     _cliAvailable = r.status === 0 && /\d+\.\d+/.test(r.stdout || "");
   } catch { _cliAvailable = false; }
   return _cliAvailable;
@@ -103,7 +103,7 @@ function callClaudeCli({ imageAbsPath, goal }) {
   const args = ["-p", "--output-format", "json", "--allowedTools", "Read"];
   if (MODEL) args.push("--model", MODEL);
   const res = spawnSync("claude", args, {
-    input: prompt, encoding: "utf8", shell: isWin, timeout: 180000, maxBuffer: 32 * 1024 * 1024,
+    input: prompt, encoding: "utf8", shell: isWin, timeout: 180000, maxBuffer: 32 * 1024 * 1024, windowsHide: true,
   });
   if (res.error) throw res.error;
   if (res.status !== 0 && !res.stdout) throw new Error(`claude exited ${res.status}: ${(res.stderr || "").slice(0, 200)}`);

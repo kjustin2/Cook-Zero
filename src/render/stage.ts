@@ -68,6 +68,11 @@ export class Stage {
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    // The post composer renders in several passes; with autoReset on, renderer.info
+    // would reflect only the last (1-draw fullscreen) pass. Reset once per frame in
+    // render() and let info accumulate, so it reports the TRUE per-frame cost
+    // (shadow + scene + post) — which the debug HUD / QA harness read.
+    this.renderer.info.autoReset = false;
 
     this.scene = new THREE.Scene();
     this.scene.background = col(0x8fbfe0);
@@ -247,6 +252,7 @@ export class Stage {
   }
 
   render(dt: number): void {
+    this.renderer.info.reset(); // accumulate all passes this frame (see autoReset above)
     this.composer.render(dt);
   }
 }
