@@ -8,6 +8,11 @@ export class WebSfx implements Sfx {
   private ac: AudioContext | null = null;
   private master: GainNode | null = null;
   muted = false;
+  private vol = 0.85; // 0–1 user level; folded into the master gain
+
+  private masterGain(): number {
+    return 0.6 * this.vol;
+  }
 
   private ctx(): AudioContext | null {
     if (this.ac) return this.ac;
@@ -15,7 +20,7 @@ export class WebSfx implements Sfx {
       const Ctor = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
       this.ac = new Ctor();
       this.master = this.ac.createGain();
-      this.master.gain.value = 0.5;
+      this.master.gain.value = this.masterGain();
       this.master.connect(this.ac.destination);
     } catch {
       this.ac = null;
@@ -29,6 +34,10 @@ export class WebSfx implements Sfx {
   }
   setMuted(m: boolean): void {
     this.muted = m;
+  }
+  setVolume(v: number): void {
+    this.vol = Math.max(0, Math.min(1, v));
+    if (this.master) this.master.gain.value = this.masterGain();
   }
 
   private tone(freq: number, dur: number, type: OscillatorType, gain = 0.3, slideTo?: number, delay = 0): void {

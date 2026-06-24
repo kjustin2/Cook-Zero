@@ -194,9 +194,17 @@ guests, near-impossible burning — so a kid wins and has fun.
 ## Performance
 
 - **Quality toggle** (`stage.applyQuality`, persisted as `meta.quality`): `high` =
-  1024 PCF soft shadows + SMAA + dpr≤2; `low` = no shadows, no SMAA, dpr 1. Both
-  share the same post chain — a `RenderPass` + a vignette `EffectPass`. There is
-  **no bloom pass** (`stage.buildPost`), in line with the no-glow pillar.
+  1024 PCF soft shadows + SMAA; `low` = no shadows, no SMAA. Both share the same
+  post chain — a `RenderPass` + a vignette `EffectPass`. There is **no bloom pass**
+  (`stage.buildPost`), in line with the no-glow pillar.
+- **Resolution scale** (`stage.applyResolution`, persisted as `meta.renderScale`):
+  a separate setting from quality (real-game-style). It multiplies the device pixel
+  ratio (`min(dpr,2) × scale`, clamped 0.5–3) so a player can keep the Fancy look
+  but render lighter (Smooth 0.67×) or super-sampled crisp (Ultra 2×). The
+  **Settings menu** (`ui.ts` `openSettings`, reachable from the title + pause) wires
+  this alongside **Fullscreen** (the cross-platform Fullscreen API — browser +
+  Electron renderer), graphics quality, master mute, and **Music/Effects volume**
+  sliders (`Sfx/Music.setVolume`). `smoke-settings` guards the whole panel.
 - Hot paths avoid per-frame allocation: pooled particles/coins/hearts/floaters in
   one capped buffer; uid/key-keyed view maps build once and dispose on removal;
   the beacon icon texture is cached by string. `smoke-perf` guards a scene-only

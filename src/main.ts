@@ -60,6 +60,13 @@ if (G.muted) {
   music.setMuted(true);
 }
 stage.applyQuality(G.quality);
+// Apply the persisted display + audio options (resolution scale, volumes).
+{
+  const m0 = loadMeta();
+  stage.applyResolution(m0.renderScale);
+  sfx.setVolume(m0.sfxVol);
+  music.setVolume(m0.musicVol);
+}
 
 // ── Phase transitions ────────────────────────────────────────────────────────
 
@@ -215,6 +222,31 @@ const controller: GameController = {
     stage.applyQuality(G.quality);
     const m = loadMeta();
     m.quality = G.quality;
+    saveMeta(m);
+  },
+  toggleFullscreen: () => {
+    // Works in the browser and the Electron renderer alike (no IPC needed).
+    if (!document.fullscreenElement) document.documentElement.requestFullscreen?.().catch(() => {});
+    else document.exitFullscreen?.().catch(() => {});
+  },
+  isFullscreen: () => !!document.fullscreenElement,
+  setResolution: (scale: number) => {
+    stage.applyResolution(scale);
+    const m = loadMeta();
+    m.renderScale = stage.renderScale;
+    saveMeta(m);
+  },
+  setMusicVol: (v: number) => {
+    music.setVolume(v);
+    const m = loadMeta();
+    m.musicVol = v;
+    saveMeta(m);
+  },
+  setSfxVol: (v: number) => {
+    sfx.setVolume(v);
+    sfx.ui(); // a tiny blip so the player hears the new level
+    const m = loadMeta();
+    m.sfxVol = v;
     saveMeta(m);
   },
 };

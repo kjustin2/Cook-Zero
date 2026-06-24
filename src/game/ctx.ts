@@ -48,6 +48,8 @@ export interface Sfx {
   star(): void;
   fanfare(): void;
   bark(): void;
+  /** Sound-effect level, 0 (silent) → 1 (full). */
+  setVolume(v: number): void;
 }
 
 export interface Music {
@@ -56,6 +58,8 @@ export interface Music {
   /** 0 = calm, 1 = on-a-roll bounce. */
   setIntensity(level: number): void;
   cue(name: "menu" | "cooking" | "story" | "win"): void;
+  /** Music level, 0 (silent) → 1 (full). */
+  setVolume(v: number): void;
 }
 
 export interface Ctx {
@@ -102,6 +106,7 @@ export const NULL_SFX: Sfx = {
   star() {},
   fanfare() {},
   bark() {},
+  setVolume() {},
 };
 
 export const NULL_MUSIC: Music = {
@@ -109,4 +114,5 @@ export const NULL_MUSIC: Music = {
   stop() {},
   setIntensity() {},
   cue() {},
+  setVolume() {},
 };

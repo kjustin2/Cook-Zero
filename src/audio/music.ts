@@ -27,7 +27,12 @@ export class WebMusic implements Music {
   private cueName: Cue = "menu";
   private intensity = 0;
   muted = false;
+  private vol = 0.8; // 0–1 user level
   private playing = false;
+
+  private masterGain(): number {
+    return this.muted ? 0 : this.vol;
+  }
 
   private ctx(): AudioContext | null {
     if (this.ac) return this.ac;
@@ -35,7 +40,7 @@ export class WebMusic implements Music {
       const Ctor = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
       this.ac = new Ctor();
       this.master = this.ac.createGain();
-      this.master.gain.value = this.muted ? 0 : 1;
+      this.master.gain.value = this.masterGain();
       this.master.connect(this.ac.destination);
     } catch {
       this.ac = null;
@@ -49,7 +54,11 @@ export class WebMusic implements Music {
   }
   setMuted(m: boolean): void {
     this.muted = m;
-    if (this.master) this.master.gain.value = m ? 0 : 1;
+    if (this.master) this.master.gain.value = this.masterGain();
+  }
+  setVolume(v: number): void {
+    this.vol = Math.max(0, Math.min(1, v));
+    if (this.master) this.master.gain.value = this.masterGain();
   }
 
   start(): void {
