@@ -19,6 +19,10 @@ export interface MetaSave {
   runs: number;
   muted: boolean;
   quality: "high" | "low";
+  // ── Display + audio options (the "real game" settings menu) ──
+  renderScale: number; // resolution multiplier on the device pixel ratio (0.5–2)
+  musicVol: number; // 0–1 music level
+  sfxVol: number; // 0–1 sound-effect level
   tutorialDone: boolean; // has the guided first shift been completed?
   unlocks: string[]; // content keys unlocked across all runs (customize.ts)
   config: RestaurantConfig | null; // last restaurant config (pre-fills setup)
@@ -30,6 +34,9 @@ const DEFAULT: MetaSave = {
   runs: 0,
   muted: false,
   quality: "high",
+  renderScale: 1,
+  musicVol: 0.8,
+  sfxVol: 0.85,
   tutorialDone: false,
   unlocks: [],
   config: null,

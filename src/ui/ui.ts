@@ -40,6 +40,12 @@ export interface GameController {
   skipCutscene(): void;
   toggleMute(): void;
   toggleQuality(): void;
+  // ── Display + audio options ──
+  toggleFullscreen(): void;
+  isFullscreen(): boolean;
+  setResolution(scale: number): void;
+  setMusicVol(v: number): void;
+  setSfxVol(v: number): void;
 }
 
 const $ = (html: string): HTMLElement => {
@@ -80,15 +86,15 @@ export class UI {
   private tutBadge!: HTMLElement;
   private screens!: HTMLElement;
   private cine!: HTMLElement;
+  private settings!: HTMLElement;
 
   private lastScore = 0;
   private lastPhase = "";
   private lastDayCardKey = "";
   private uiLastShot = -1;
-  private muteBtns: HTMLElement[] = [];
-  private qualBtns: HTMLElement[] = [];
   private work: RestaurantConfig | null = null; // live editing copy in setup/manage
   private czCat: CzCat = "chef"; // which customizer category is open
+  private settingsOpen = false;
 
   constructor(root: HTMLElement, ctrl: GameController) {
     this.root = root;
@@ -154,6 +160,19 @@ export class UI {
       </div>`);
     this.root.appendChild(this.cine);
     this.cine.querySelector("[data-cskip]")!.addEventListener("click", () => this.ctrl.skipCutscene());
+
+    // The Settings overlay sits above every other screen and can be opened from
+    // the title or the pause menu. Empty + hidden until opened.
+    this.settings = $(`<div class="settings-screen"></div>`);
+    this.root.appendChild(this.settings);
+    // Esc closes Settings (and is swallowed so it doesn't also toggle pause behind).
+    window.addEventListener("keydown", (e) => {
+      if (!this.settingsOpen) return;
+      if (e.code === "Escape") { e.preventDefault(); e.stopPropagation(); this.closeSettings(); }
+      else if (e.code === "Space" || e.code === "Enter") e.stopPropagation();
+    }, true);
+    // Leaving fullscreen by any route (Esc/F11) must refresh the open panel's label.
+    document.addEventListener("fullscreenchange", () => { if (this.settingsOpen) this.renderSettingsBody(); });
   }
 
   // ── per-frame ──
@@ -338,8 +357,7 @@ export class UI {
           <div class="muted">Best day reached: ${meta.bestDay} ${"⭐".repeat(Math.min(3, meta.bestStars))}</div>
         </div>
         <div class="row">
-          <button class="btn ghost" data-mute>${muteLabel(meta.muted)}</button>
-          <button class="btn ghost" data-qual>${qualLabel(meta.quality)}</button>
+          <button class="btn ghost" data-opensettings>⚙️ Settings</button>
         </div>
         <div class="controls-tip">Move: Arrow keys (or WASD) &nbsp;·&nbsp; Do everything: SPACE &nbsp;·&nbsp; Dash: Shift</div>
       </div>`;
@@ -582,14 +600,12 @@ export class UI {
   }
 
   private pauseHtml(): string {
-    const meta = loadMeta();
     return `
       <div class="overlay">
         <div class="big-title">Paused</div>
         <button class="btn big" data-resume>▶ Resume</button>
         <div class="row">
-          <button class="btn ghost" data-mute>${muteLabel(meta.muted)}</button>
-          <button class="btn ghost" data-qual>${qualLabel(meta.quality)}</button>
+          <button class="btn ghost" data-opensettings>⚙️ Settings</button>
         </div>
         <button class="btn ghost" data-quit>🏠 Save &amp; Quit to Title</button>
       </div>`;
@@ -613,7 +629,7 @@ export class UI {
     if (G.phase === "setup" || G.phase === "manage") this.wireCustomizer(G);
     if (G.phase === "setup") this.wireArrange(G);
     if (G.phase === "manage") { this.wireTabs(); this.wireUpgrade(); this.wireArrange(G); }
-    this.bindToggles();
+    this.wireOpenSettings();
   }
 
   private wireTabs(): void {
@@ -771,20 +787,122 @@ export class UI {
   private wirePause(): void {
     this.screens.querySelector("[data-resume]")?.addEventListener("click", () => this.ctrl.resume());
     this.screens.querySelector("[data-quit]")?.addEventListener("click", () => this.ctrl.quitToTitle());
-    this.bindToggles();
+    this.wireOpenSettings();
   }
 
-  private bindToggles(): void {
-    this.muteBtns = Array.from(this.screens.querySelectorAll("[data-mute]")) as HTMLElement[];
-    this.qualBtns = Array.from(this.screens.querySelectorAll("[data-qual]")) as HTMLElement[];
-    this.muteBtns.forEach((b) => b.addEventListener("click", () => { this.ctrl.toggleMute(); this.refreshToggleLabels(); }));
-    this.qualBtns.forEach((b) => b.addEventListener("click", () => { this.ctrl.toggleQuality(); this.refreshToggleLabels(); }));
+  private wireOpenSettings(): void {
+    this.screens.querySelector("[data-opensettings]")?.addEventListener("click", () => this.openSettings());
   }
 
-  private refreshToggleLabels(): void {
+  // ── Settings overlay (display + sound) ──────────────────────────────────────
+  openSettings(): void {
+    this.settingsOpen = true;
+    this.settings.innerHTML = `
+      <div class="settings-card">
+        <div class="set-head">⚙️ Settings</div>
+        <div class="set-body" data-set-body>${this.settingsBody()}</div>
+        <button class="btn big" data-set-close>✓ Done</button>
+      </div>`;
+    this.settings.classList.add("on");
+    this.settings.querySelector("[data-set-close]")!.addEventListener("click", () => this.closeSettings());
+    this.wireSettings();
+  }
+
+  closeSettings(): void {
+    this.settingsOpen = false;
+    this.settings.classList.remove("on");
+    this.settings.innerHTML = "";
+  }
+
+  /** Re-render just the body (after a discrete toggle/segment change) and re-wire. */
+  private renderSettingsBody(): void {
+    const body = this.settings.querySelector("[data-set-body]");
+    if (!body) return;
+    body.innerHTML = this.settingsBody();
+    this.wireSettings();
+  }
+
+  private settingsBody(): string {
     const meta = loadMeta();
-    this.muteBtns.forEach((b) => (b.textContent = muteLabel(meta.muted)));
-    this.qualBtns.forEach((b) => (b.textContent = qualLabel(meta.quality)));
+    const fs = this.ctrl.isFullscreen();
+    return `
+      <div class="set-section">
+        <div class="set-sec-title">🖥️ Display</div>
+        <div class="set-row">
+          <span class="set-label">Fullscreen</span>
+          <button class="set-toggle${fs ? " on" : ""}" data-set-fs>${fs ? "⛶ On" : "⛶ Off"}</button>
+        </div>
+        <div class="set-row">
+          <span class="set-label">Resolution</span>
+          <div class="seg" data-set-res>${this.segButtons(RES_OPTIONS.map(([v, n]) => [String(v), n]), (v) => nearScale(meta.renderScale, Number(v)))}</div>
+        </div>
+        <div class="set-row">
+          <span class="set-label">Graphics</span>
+          <div class="seg" data-set-qual>${this.segButtons([["high", "Fancy"], ["low", "Smooth"]], (v) => v === meta.quality)}</div>
+        </div>
+      </div>
+      <div class="set-section">
+        <div class="set-sec-title">🔊 Sound</div>
+        <div class="set-row">
+          <span class="set-label">Sound</span>
+          <button class="set-toggle${meta.muted ? "" : " on"}" data-set-mute>${meta.muted ? "🔇 Off" : "🔊 On"}</button>
+        </div>
+        ${this.sliderRow("Music", "music", meta.musicVol, meta.muted)}
+        ${this.sliderRow("Effects", "sfx", meta.sfxVol, meta.muted)}
+      </div>`;
+  }
+
+  private segButtons(opts: Array<[string, string]>, isOn: (v: string) => boolean): string {
+    return opts.map(([v, n]) =>
+      `<button class="seg-btn${isOn(v) ? " on" : ""}" data-seg="${v}">${n}</button>`,
+    ).join("");
+  }
+
+  private sliderRow(label: string, key: string, val: number, muted: boolean): string {
+    const pct = Math.round(val * 100);
+    return `
+      <div class="set-row${muted ? " dim" : ""}">
+        <span class="set-label">${label}</span>
+        <input class="set-slider" type="range" min="0" max="100" value="${pct}" data-set-slider="${key}" ${muted ? "disabled" : ""} />
+        <span class="set-pct" data-set-pct="${key}">${pct}%</span>
+      </div>`;
+  }
+
+  private wireSettings(): void {
+    const root = this.settings;
+    root.querySelector("[data-set-fs]")?.addEventListener("click", () => {
+      this.ctrl.toggleFullscreen();
+      // The fullscreenchange event re-renders the body; nothing else to do here.
+    });
+    root.querySelector("[data-set-mute]")?.addEventListener("click", () => {
+      this.ctrl.toggleMute();
+      this.renderSettingsBody();
+    });
+    root.querySelector("[data-set-res]")?.querySelectorAll("[data-seg]").forEach((el) =>
+      el.addEventListener("click", () => {
+        this.ctrl.setResolution(Number((el as HTMLElement).dataset.seg));
+        this.renderSettingsBody();
+      }),
+    );
+    root.querySelector("[data-set-qual]")?.querySelectorAll("[data-seg]").forEach((el) =>
+      el.addEventListener("click", () => {
+        const want = (el as HTMLElement).dataset.seg as "high" | "low";
+        if (want !== loadMeta().quality) this.ctrl.toggleQuality();
+        this.renderSettingsBody();
+      }),
+    );
+    // Sliders update live (no re-render mid-drag, which would drop the thumb).
+    root.querySelectorAll("[data-set-slider]").forEach((el) =>
+      el.addEventListener("input", () => {
+        const input = el as HTMLInputElement;
+        const key = input.dataset.setSlider!;
+        const v = Number(input.value) / 100;
+        if (key === "music") this.ctrl.setMusicVol(v);
+        else this.ctrl.setSfxVol(v);
+        const pctEl = root.querySelector(`[data-set-pct="${key}"]`);
+        if (pctEl) pctEl.textContent = `${Math.round(v * 100)}%`;
+      }),
+    );
   }
 }
 
@@ -806,8 +924,19 @@ const CZ_FOCUS: Record<CzCat, "chef" | "room"> = {
   menu: "room", chef: "chef", pet: "chef", diner: "room", tables: "room", gear: "room", flowers: "room", layout: "room",
 };
 
-const muteLabel = (muted: boolean): string => (muted ? "🔇 Sound: Off" : "🔊 Sound: On");
-const qualLabel = (quality: "high" | "low"): string => `🎨 Graphics: ${quality === "high" ? "Fancy" : "Smooth"}`;
+/** Resolution-scale options (multiplier on the device pixel ratio) → friendly name. */
+const RES_OPTIONS: Array<[number, string]> = [
+  [0.67, "Smooth"],
+  [1.0, "Native"],
+  [1.5, "Crisp"],
+  [2.0, "Ultra"],
+];
+/** True if `scale` is the option closest to the saved render scale (float-safe match). */
+const nearScale = (saved: number, opt: number): boolean => {
+  let best = RES_OPTIONS[0][0];
+  for (const [v] of RES_OPTIONS) if (Math.abs(v - saved) < Math.abs(best - saved)) best = v;
+  return opt === best;
+};
 
 const iconForStation = (id: StationId): string => {
   switch (id) {

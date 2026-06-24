@@ -18,6 +18,8 @@ export class Stage {
   readonly keyLight: THREE.DirectionalLight;
   readonly hemiLight: THREE.HemisphereLight;
   quality: "high" | "low" = "high";
+  /** Resolution multiplier on the device pixel ratio (the "Resolution" option). */
+  renderScale = 1;
 
   private readonly fog: THREE.Fog;
   private composer!: EffectComposer;
@@ -57,7 +59,7 @@ export class Stage {
 
   constructor(canvas: HTMLCanvasElement) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: "high-performance", stencil: false });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.renderer.setPixelRatio(this.targetPixelRatio());
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     // Neutral (Khronos PBR Neutral) tone mapping preserves hue + saturation, so a
     // colour the player picks renders as that colour (ACES Filmic shifted whites
@@ -126,12 +128,26 @@ export class Stage {
     this.composer.setSize(window.innerWidth, window.innerHeight);
   }
 
+  /** The effective device pixel ratio: native (capped at 2) times the chosen
+   *  resolution scale, then clamped so neither extreme melts a GPU or a frame. */
+  private targetPixelRatio(): number {
+    return clamp(Math.min(window.devicePixelRatio, 2) * this.renderScale, 0.5, 3);
+  }
+
+  /** Quality controls only shadows + SMAA now; resolution is its own setting so a
+   *  player can keep the fancy look but render at a lighter (or crisper) scale. */
   applyQuality(q: "high" | "low"): void {
     this.quality = q;
-    this.renderer.setPixelRatio(q === "high" ? Math.min(window.devicePixelRatio, 2) : 1);
-    this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.keyLight.castShadow = q === "high";
     this.buildPost();
+  }
+
+  /** Resolution scale (0.5 = smoother/faster … 2 = super-sampled crisp). */
+  applyResolution(scale: number): void {
+    this.renderScale = clamp(scale, 0.5, 2);
+    this.renderer.setPixelRatio(this.targetPixelRatio());
+    this.renderer.setSize(window.innerWidth, window.innerHeight);
+    this.composer.setSize(window.innerWidth, window.innerHeight);
   }
 
   /** f: 0 (sunny morning) → 1 (warm golden evening). Warm + friendly, not washed. */
@@ -153,6 +169,9 @@ export class Stage {
     const w = window.innerWidth, h = window.innerHeight;
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
+    // Re-apply pixel ratio too: entering fullscreen / moving to another monitor
+    // can change devicePixelRatio, and the render scale should track it.
+    this.renderer.setPixelRatio(this.targetPixelRatio());
     this.renderer.setSize(w, h);
     this.composer.setSize(w, h);
   }

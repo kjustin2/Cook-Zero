@@ -14,6 +14,7 @@ const SMOKES = [
   "smoke-balance.mjs",
   "smoke-pet-garden.mjs",
   "smoke-setup.mjs",
+  "smoke-settings.mjs",
   "smoke-scenarios.mjs",
   "smoke-visual.mjs",
   "smoke-save.mjs",
